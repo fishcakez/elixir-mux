@@ -105,6 +105,8 @@ defmodule MuxData do
     do: map_of(ascii_string(), binary())
 end
 
+{:ok, _} = Application.ensure_all_started(:logger)
+
 # set seed to satisfy stream_data (seed set on ~> v1.5)
 {_, seed, _} = :os.timestamp()
 ExUnit.start([seed: seed])
