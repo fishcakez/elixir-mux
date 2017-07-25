@@ -209,14 +209,48 @@ defmodule Mux.ClientTest do
     assert_receive {^srv, {:packet, ^tag}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
   end
 
-  test "client sends back error on drain/init", %{server: srv} do
-    MuxProxy.commands(srv, [{:send, 1, :transmit_drain},
-                            {:send, 2, {:transmit_init, 1, %{}}}])
+  @tag :capture_log
+  @tag debug: []
+  test "client shutdowns on drain if no exchanges", context do
+    %{client: cli, server: srv} = context
+    Process.flag(:trap_exit, true)
+
+    MuxProxy.commands(srv, [{:send, 1, :transmit_drain}])
+
+    assert_receive {^srv, {:packet, 1}, :receive_drain}
+
+    assert_receive {:EXIT, ^srv, {:tcp_error, :closed}}
+    assert_received {^srv, :terminate, {:tcp_error, :closed}}
+    assert_receive {:EXIT, ^cli, {:tcp_error, :closed}}
+  end
+
+  @tag :capture_log
+  @tag debug: []
+  test "client shutdowns on drain once last exchange responds", context do
+    %{client: cli, server: srv} = context
+    Process.flag(:trap_exit, true)
+    ref = Mux.Client.async_dispatch(cli, %{}, "", %{}, "hello")
+    assert_receive {^srv, {:packet, tag}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
+
+    MuxProxy.commands(srv, [{:send, 1, :transmit_drain}])
+    assert_receive {^srv, {:packet, 1}, :receive_drain}
+
+    # client promised not to send more requests
+    assert Mux.Client.sync_dispatch(cli, %{}, "", %{}, "hi") == {:nack, %{}}
+
+    MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :ok, %{}, "ok"}}])
+
+    assert_receive {^ref, {:ok, %{}, "ok"}}
+
+    assert_receive {:EXIT, ^srv, {:tcp_error, :closed}}
+    assert_received {^srv, :terminate, {:tcp_error, :closed}}
+    assert_receive {:EXIT, ^cli, {:tcp_error, :closed}}
+  end
+
+  test "client sends back error on init", %{server: srv} do
+    MuxProxy.commands(srv, [{:send, 1, {:transmit_init, 1, %{}}}])
 
     assert_receive {^srv, {:packet, 1},
-      {:receive_error, "can not handle drain"}}
-
-    assert_receive {^srv, {:packet, 2},
       {:receive_error, "can not handle init"}}
   end
 

@@ -10,8 +10,8 @@ defmodule Mux.Client do
 
   defmodule State do
     @moduledoc false
-    @enforce_keys [:tags, :exchanges, :monitors, :clients]
-    defstruct [:tags, :exchanges, :monitors, :clients]
+    @enforce_keys [:tags, :exchanges, :monitors, :refs, :socket]
+    defstruct [:tags, :exchanges, :monitors, :refs, :socket]
   end
 
   @discarded_message "process discarded"
@@ -54,15 +54,18 @@ defmodule Mux.Client do
   end
 
   @spec enter_loop(:gen_tcp.socket, [option]) :: no_return
-  def enter_loop(socket, opts) do
+  def enter_loop(sock, opts) do
     {session_size, conn_opts} = Keyword.pop(opts, :session_size, 32)
-    Mux.Connection.enter_loop(__MODULE__, socket, session_size, conn_opts)
+    Mux.Connection.enter_loop(__MODULE__, sock, {sock, session_size}, conn_opts)
   end
 
   @doc false
-  def init(session_size) when session_size > 0 and session_size < 0x80_FF_FF do
+  def init({sock, session_size})
+      when session_size > 0 and session_size < 0x80_FF_FF do
     tags = tags_new(1..session_size)
-    {[], %State{tags: tags, exchanges: %{}, monitors: %{}, clients: %{}}}
+    state = %State{tags: tags, exchanges: %{}, monitors: %{}, refs: %{},
+                   socket: sock}
+    {[], state}
   end
 
   @doc false
@@ -89,6 +92,9 @@ defmodule Mux.Client do
   end
   def handle(:info, {:DOWN, mon, _, _, _}, state) do
     handle_down(mon, state)
+  end
+  def handle(:info, :shutdown_write, state) do
+    {[], check_drain(state)}
   end
   def handle(:info, msg, state) do
     :error_logger.error_msg("Mux.Client received unexpected message: ~p~n",
@@ -119,8 +125,7 @@ defmodule Mux.Client do
         # this is a client only
         {[receive_error(tag, "can not handle dispatch")], state}
       :transmit_drain ->
-        # should handle drain
-        {[receive_error(tag, "can not handle drain")], state}
+        handle_drain(tag, state)
       :transmit_ping ->
         {[receive_ping(tag)], state}
       {:transmit_init, _, _} ->
@@ -176,19 +181,39 @@ defmodule Mux.Client do
 
   defp receive_pop(tag, state) do
     %State{tags: tags, exchanges: exchanges, monitors: monitors,
-          clients: clients} = state
+          refs: refs} = state
     tags = tags_put(tags, tag)
     case Map.pop(exchanges, tag) do
       {{{_, ref} = from, mon}, exchanges} ->
         Process.demonitor(mon, [:flush])
         monitors = Map.delete(monitors, mon)
-        clients = Map.delete(clients, ref)
+        refs = Map.delete(refs, ref)
         state = %State{state | tags: tags, exchanges: exchanges,
-                               monitors: monitors, clients: clients}
-        {from, state}
+                               monitors: monitors, refs: refs}
+        {from, check_drain(state)}
       {:discarded, exchanges} ->
-        {nil, %State{state | tags: tags, exchanges: exchanges}}
+        state = %State{state | tags: tags, exchanges: exchanges}
+        {nil, check_drain(state)}
     end
+  end
+
+  # if drain and empty exchanges it's time to close the socket
+  def check_drain(%State{tags: :drain, exchanges: exchanges} = state) do
+    case map_size(exchanges) do
+      0 ->
+        shutdown_write(state)
+      _ ->
+        state
+    end
+  end
+  def check_drain(state),
+    do: state
+
+  defp shutdown_write(%State{socket: socket} = state) do
+    # exchanges is empty so no dispatches in send queue, shutdown write side and
+    # wait for server to close
+    _ = :gen_tcp.shutdown(socket, :write)
+    state
   end
 
   defp receive_error(tag, why),
@@ -199,7 +224,7 @@ defmodule Mux.Client do
 
   defp handle_dispatch(from, context, dest, tab, body, state) do
     %State{tags: tags, exchanges: exchanges, monitors: monitors,
-          clients: clients} = state
+           refs: refs} = state
     case tags_pop(tags) do
       {nil, _} ->
         # consider adding MuxFailure flag to context of noop nack
@@ -210,39 +235,49 @@ defmodule Mux.Client do
         exchanges = Map.put(exchanges, tag, {from, mon})
         mon = Process.monitor(pid)
         monitors = Map.put(monitors, mon, {tag, ref})
-        clients = Map.put(clients, ref, {tag, mon})
+        refs = Map.put(refs, ref, {tag, mon})
         state = %State{state | tags: tags, exchanges: exchanges,
-                               monitors: monitors, clients: clients}
+                               monitors: monitors, refs: refs}
         {[transmit_dispatch(tag, context, dest, tab, body)], state}
     end
   end
 
   defp handle_cancel(ref, why, state) do
-    %State{exchanges: exchanges, monitors: monitors, clients: clients} = state
-    case Map.pop(clients, ref) do
+    %State{exchanges: exchanges, monitors: monitors, refs: refs} = state
+    case Map.pop(refs, ref) do
       {nil, _} ->
         {:error, [], state}
-      {{tag, mon}, clients} ->
+      {{tag, mon}, refs} ->
         exchanges = Map.put(exchanges, tag, :discarded)
         monitors = Map.delete(monitors, mon)
         state = %State{state | exchanges: exchanges, monitors: monitors,
-                               clients: clients}
+                               refs: refs}
         {:ok, [transmit_discarded(tag, why)], state}
     end
   end
 
   defp handle_down(mon, state) do
-    %State{exchanges: exchanges, monitors: monitors, clients: clients} = state
+    %State{exchanges: exchanges, monitors: monitors, refs: refs} = state
     case Map.pop(monitors, mon) do
       {nil, _} ->
         {[], state}
       {{tag, ref}, monitors} ->
         exchanges = Map.put(exchanges, tag, :discarded)
-        clients = Map.delete(clients, ref)
+        refs = Map.delete(refs, ref)
         state = %State{state | exchanges: exchanges, monitors: monitors,
-                               clients: clients}
+                               refs: refs}
         {[transmit_discarded(tag, @discarded_message)], state}
     end
+  end
+
+  # set a fake tags so no new tags can be assigned and so no new dispatches,
+  defp handle_drain(tag, %State{exchanges: exchanges} = state) do
+    if map_size(exchanges) == 0 do
+        # delay shutting down write so that receive_drain is sent to server
+        # before shutting down socket
+        send(self(), :shutdown_write)
+    end
+    {[receive_drain(tag)], %State{state | tags: :drain}}
   end
 
   defp transmit_dispatch(tag, context, dest, tab, body),
@@ -251,15 +286,22 @@ defmodule Mux.Client do
   defp transmit_discarded(tag, why),
     do: {:send, 0, {:transmit_discarded, tag, why}}
 
+  defp receive_drain(tag),
+    do: {:send, tag, :receive_drain}
+
   defp tags_new(range) do
     range
     |> Enum.to_list()
     |> :gb_sets.from_list()
   end
 
+  defp tags_put(:drain, _),
+    do: :drain
   defp tags_put(tags, tag),
     do: :gb_sets.add_element(tag, tags)
 
+  defp tags_pop(:drain),
+    do: {nil, :drain}
   defp tags_pop(tags) do
     if :gb_sets.is_empty(tags) do
       {nil, tags}

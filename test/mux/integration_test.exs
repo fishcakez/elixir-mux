@@ -27,6 +27,34 @@ defmodule Mux.IntegrationTest do
     assert_receive {:DOWN, ^mon, _, _, :killed}
   end
 
+  @tag :capture_log
+  @tag debug: []
+  test "server drain causes close after tasks handled", context do
+    %{client: cli, server: srv} = context
+
+    Process.flag(:trap_exit, true)
+
+    ref1 = Mux.Client.async_dispatch(cli, %{}, "dest", %{}, "1")
+    ref2 = Mux.Client.async_dispatch(cli, %{}, "dest", %{}, "2")
+    assert_receive {task1, :handle, {%{}, "dest", %{}, "1"}}
+    assert_receive {task2, :handle, {%{}, "dest", %{}, "2"}}
+
+    Mux.Server.drain(srv)
+
+    # send first after drain to ensure receive_drain arrives before response
+    send(task1, {self(), {:ok, %{}, "one"}})
+    # draining must have commenced once this is received
+    assert_receive {^ref1, {:ok, %{}, "one"}}
+    # client nacks all new requests
+    assert Mux.Client.sync_dispatch(cli, %{}, "", %{}, "drain") == {:nack, %{}}
+
+    send(task2, {self(), {:ok, %{}, "two"}})
+    assert_receive {^ref2, {:ok, %{}, "two"}}
+
+    assert_receive {:EXIT, ^cli, {:tcp_error, :closed}}
+    assert_receive {:EXIT, ^srv, {:tcp_error, :closed}}
+  end
+
   ## Helpers
 
   defp pair(opts) do

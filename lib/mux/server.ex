@@ -8,13 +8,16 @@ defmodule Mux.Server do
 
   @behaviour Mux.Connection
 
+  @drain_tag 1
+
   defmodule State do
     @moduledoc false
-    @enforce_keys [:exchanges, :tasks, :session_size, :handler, :ref]
-    defstruct [:exchanges, :tasks, :session_size, :handler, :ref]
+    @enforce_keys [:exchanges, :tasks, :session_size, :handler, :ref, :drain]
+    defstruct [:exchanges, :tasks, :session_size, :handler, :ref, :drain]
   end
 
   @type state :: any
+  @type server :: Mux.Connection.connection
   @type option :: Mux.Connection.option | {:session_size, pos_integer}
   @type result ::
     {:ok, Mux.Packet.context, body :: binary} |
@@ -24,6 +27,10 @@ defmodule Mux.Server do
 
   @callback handle(Mux.Packet.context, Mux.Packet.dest, Mux.Packet.dest_table,
             body :: binary, state) :: result
+
+  @spec drain(server) :: :ok
+  def drain(server),
+    do: Mux.Connection.cast(server, :drain)
 
   @spec enter_loop(module, :gen_tcp.socket, state, [option]) :: no_return
   def enter_loop(mod, sock, state, opts) do
@@ -36,7 +43,7 @@ defmodule Mux.Server do
   def init({handler, session_size}) do
     Process.flag(:trap_exit, true)
     state = %State{exchanges: %{}, tasks: %{}, session_size: session_size,
-                   handler: handler, ref: make_ref()}
+                   handler: handler, ref: make_ref(), drain: false}
     {[], state}
   end
 
@@ -52,6 +59,8 @@ defmodule Mux.Server do
                             [msg])
     {[], state}
   end
+  def handle(:cast, :drain, state),
+    do: handle_drain(state)
 
   @doc false
   def terminate(_, %State{tasks: tasks}) do
@@ -72,6 +81,9 @@ defmodule Mux.Server do
     do: handle_discarded(tag, state)
   defp handle_packet(0, _cast, state),
     do: {[], state}
+  # check to see if sent drain request, wait for client to close
+  defp handle_packet(tag, :receive_drain, %State{drain: tag} = state),
+    do: {[], %State{state | drain: true}}
   defp handle_packet(tag, packet, state) do
     case packet do
       {:transmit_dispatch, context, dest, dest_table, body} ->
@@ -201,6 +213,15 @@ defmodule Mux.Server do
         {[receive_dispatch_nack(tag, context)], state}
     end
   end
+
+  # only send drain if haven't already
+  defp handle_drain(%State{drain: false} = state),
+    do: {[transmit_drain(@drain_tag)], %State{state | drain: @drain_tag}}
+  defp handle_drain(state),
+    do: {[], state}
+
+  defp transmit_drain(tag),
+    do: {:send, tag, :transmit_drain}
 
   defp receive_dispatch_ok(tag, context, body),
     do: receive_dispatch(tag, :ok, context, body)
