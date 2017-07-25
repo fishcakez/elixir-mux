@@ -12,11 +12,13 @@ defmodule Mux.Connection do
   use Bitwise
 
   defmodule Data do
+    @moduledoc false
     @enforce_keys [:mod, :sock, :state, :frame_size, :acks, :discards,
                    :fragments]
     defstruct [:mod, :sock, :state, :frame_size, :acks, :discards, :fragments]
   end
 
+  @type connection :: :gen_statem.server_ref
   @type option ::
     :gen_statem.debug_opt |
     :gen_statem.hibernate_after_opt |
@@ -27,7 +29,6 @@ defmodule Mux.Connection do
     {:frame_size, pos_integer} |
     {:reply, from, any} |
     {:send, Mux.Packet.tag, Mux.Packet.t}
-
   @type state :: any
   @type from :: :gen_statem.from
   @type event_type :: :cast | :info | {:call, from} | {:packet, Mux.Packet.tag}
@@ -37,6 +38,12 @@ defmodule Mux.Connection do
   @callback handle(event_type, event :: any, state) :: {[command], state}
 
   @callback terminate(reason :: any, state) :: any
+
+  @spec cast(connection, request :: any) :: :ok
+  defdelegate cast(connection, request), to: :gen_statem
+
+  @spec call(connection, request :: any, timeout) :: :ok
+  defdelegate call(connection, request, timeout), to: :gen_statem
 
   @spec enter_loop(module, :gen_tcp.socket, state, [option]) :: no_return
   def enter_loop(mod, sock, state, opts \\ []) do
