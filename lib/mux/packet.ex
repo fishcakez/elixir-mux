@@ -44,14 +44,14 @@ defmodule Mux.Packet do
   @type status :: :ok | :error | :nack
   @type context :: %{optional(String.t) => binary}
   @type dest :: String.t
-  @type dispatch :: %{optional(dest) => dest}
+  @type dest_table :: %{optional(dest) => dest}
   @type version :: 0..0xFF_FF # 16 bit unsigned int
   @type headers :: %{optional(String.t) => binary}
 
   @type packet ::
     {:transmit_request, keys, body :: binary} |
     {:receive_request, status, body :: binary} |
-    {:transmit_dispatch, context, dest, dispatch, body :: binary} |
+    {:transmit_dispatch, context, dest, dest_table, body :: binary} |
     {:receive_dispatch, status, context, body :: binary} |
     :transmit_drain |
     :receive_drain |
@@ -74,10 +74,10 @@ defmodule Mux.Packet do
         {@transmit_request, [encode_keys(keys) | body]}
       {:receive_request, status, body} ->
         {@receive_request, [encode_status(status) | body]}
-      {:transmit_dispatch, context, dest, dispatch, body} ->
+      {:transmit_dispatch, context, dest, dest_table, body} ->
         {@transmit_dispatch,
          [encode_context(context), encode_dest(dest),
-          encode_dispatch(dispatch) | body]}
+          encode_dispatch(dest_table) | body]}
       {:receive_dispatch, status, context, body} ->
         {@receive_dispatch,
          [encode_status(status), encode_context(context) | body]}
