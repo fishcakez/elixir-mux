@@ -21,7 +21,8 @@ defmodule Mux.Client do
 
   @type result ::
     {:ok, Mux.Packet.context, body :: binary} |
-    {:error, %Mux.ApplicationError{} | %Mux.ServerError{}} |
+    {:error, Mux.Packet.context, %Mux.ApplicationError{}}
+    {:error, %Mux.ServerError{}}
     :nack
 
   @spec sync_dispatch(client, Mux.Packet.context, Mux.Packet.dest,
@@ -161,8 +162,8 @@ defmodule Mux.Client do
   defp reply(from, :ok, context, body),
     do: {:reply, from, {:ok, context, body}}
 
-  defp reply(from, :error, _context, why),
-    do: reply_error(from, Mux.ApplicationError.exception(why))
+  defp reply(from, :error, context, why),
+    do: {:reply, from, {:error, context, Mux.ApplicationError.exception(why)}}
 
   defp reply(from, :nack, _context, _body),
     do: reply_nack(from)

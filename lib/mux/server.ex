@@ -18,7 +18,8 @@ defmodule Mux.Server do
   @type option :: Mux.Connection.option | {:session_size, pos_integer}
   @type result ::
     {:ok, Mux.Packet.context, body :: binary} |
-    {:error, %Mux.ApplicationError{} | %Mux.ServerError{}} |
+    {:error, Mux.Packet.context, %Mux.ApplicationError{}}
+    {:error, %Mux.ServerError{}}
     :nack
 
   @callback handle(Mux.Packet.context, Mux.Packet.dest, Mux.Packet.dest_table,
@@ -137,7 +138,9 @@ defmodule Mux.Server do
     case apply(mod, fun, args) do
       {:ok, _context, _body} = ok ->
         dispatch_result(ref, ok)
-      {:error, _} = error ->
+      {:error, _context, %Mux.ApplicationError{}} = error ->
+        dispatch_result(ref, error)
+      {:error, %Mux.ServerError{}} = error ->
         dispatch_result(ref, error)
       :nack ->
         dispatch_result(ref, :nack)
@@ -185,23 +188,24 @@ defmodule Mux.Server do
     end
   end
 
-  defp handle_result(tag, {:ok, context, body}, state),
-    do: {[receive_dispatch_ok(tag, context, body)], state}
-
-  defp handle_result(tag, {:error, %Mux.ApplicationError{message: msg}}, state),
-    do: {[receive_dispatch_error(tag, msg)], state}
-
-  defp handle_result(tag, {:error, %Mux.ServerError{message: msg}}, state),
-    do: {[receive_error(tag, msg)], state}
-
-  defp handle_result(tag, :nack, state),
-    do: {[receive_dispatch_nack(tag)], state}
+  defp handle_result(tag, result, state) do
+    case result do
+      {:ok, context, body} ->
+        {[receive_dispatch_ok(tag, context, body)], state}
+      {:error, context, %Mux.ApplicationError{message: msg}} ->
+        {[receive_dispatch_error(tag, context, msg)], state}
+      {:error, %Mux.ServerError{message: msg}} ->
+        {[receive_error(tag, msg)], state}
+      :nack ->
+        {[receive_dispatch_nack(tag)], state}
+    end
+  end
 
   defp receive_dispatch_ok(tag, context, body),
     do: receive_dispatch(tag, :ok, context, body)
 
-  defp receive_dispatch_error(tag, why),
-    do: receive_dispatch(tag, :error, %{}, why)
+  defp receive_dispatch_error(tag, context, why),
+    do: receive_dispatch(tag, :error, context, why)
 
   defp receive_dispatch_nack(tag),
     do: receive_dispatch(tag, :nack, %{}, "")

@@ -35,7 +35,7 @@ defmodule Mux.ClientTest do
     msg = "bad!"
     MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :error, %{}, msg}}])
 
-    assert Task.await(task) == {:error, %Mux.ApplicationError{message: msg}}
+    assert Task.await(task) == {:error, %{}, %Mux.ApplicationError{message: msg}}
   end
 
   test "client dispatch returns server error", %{client: cli, server: srv} do

@@ -40,7 +40,7 @@ defmodule Mux.ServerTest do
   test "server dispatch returns app error response", %{client: cli} do
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "hi"}}])
     assert_receive {task, :handle, {%{}, "", %{}, "hi"}}
-    send(task, {self(), {:error, Mux.ApplicationError.exception("oops")}})
+    send(task, {self(), {:error, %{}, Mux.ApplicationError.exception("oops")}})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :error, %{}, "oops"}}
   end
