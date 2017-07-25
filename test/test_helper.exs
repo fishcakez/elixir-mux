@@ -1,3 +1,35 @@
+defmodule MuxProxy do
+  def commands(pid, commands),
+    do: send(pid, {:commands, commands})
+
+  def spawn_link(socket, opts) do
+    pid = :proc_lib.spawn_link(__MODULE__, :init_it, [self(), opts])
+    :ok = :gen_tcp.controlling_process(socket, pid)
+    send(pid, {self(), socket})
+    pid
+  end
+
+  def init_it(parent, opts) do
+    receive do
+      {^parent, socket} ->
+        Mux.Connection.enter_loop(__MODULE__, socket, parent, opts)
+    end
+  end
+
+  def init(parent),
+    do: {[], parent}
+
+  def handle(_, {:commands, commands}, parent),
+    do: {commands, parent}
+  def handle(event_type, event, parent) do
+    send(parent, {self(), event_type, event})
+    {[], parent}
+  end
+
+  def terminate(reason, parent),
+    do: send(parent, {self(), :terminate, reason})
+end
+
 defmodule MuxData do
 
   import StreamData
