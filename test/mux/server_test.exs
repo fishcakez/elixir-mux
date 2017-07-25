@@ -32,9 +32,9 @@ defmodule Mux.ServerTest do
   test "server dispatch returns nack response", %{client: cli} do
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "hi"}}])
     assert_receive {task, :handle, {%{}, "", %{}, "hi"}}
-    send(task, {self(), :nack})
+    send(task, {self(), {:nack, %{"a" => "b"}}})
     assert_receive {^cli, {:packet, 1},
-      {:receive_dispatch, :nack, %{}, ""}}
+      {:receive_dispatch, :nack, %{"a" => "b"}, ""}}
   end
 
   test "server dispatch returns app error response", %{client: cli} do
@@ -83,7 +83,7 @@ defmodule Mux.ServerTest do
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "hi"}}])
     assert_receive {task, :handle, {%{}, "", %{}, "hi"}}
 
-    send(task, {self(), :nack})
+    send(task, {self(), {:nack, %{}}})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :nack, %{}, ""}}
 
@@ -95,7 +95,7 @@ defmodule Mux.ServerTest do
   test "server handles client reusing tag", %{client: cli} do
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "hi"}}])
     assert_receive {task1, :handle, {%{}, "", %{}, "hi"}}
-    send(task1, {self(), :nack})
+    send(task1, {self(), {:nack, %{}}})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :nack, %{}, ""}}
 
@@ -112,12 +112,12 @@ defmodule Mux.ServerTest do
                             {:send, 1, {:transmit_dispatch, %{}, "", %{}, "2"}}])
 
     assert_receive {task2, :handle, {%{}, "", %{}, "2"}}
-    send(task2, {self(), :nack})
+    send(task2, {self(), {:nack, %{}}})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :nack, %{}, ""}}
 
     assert_receive {task1, :handle, {%{}, "", %{}, "1"}}
-    send(task1, {self(), :nack})
+    send(task1, {self(), {:nack, %{}}})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :nack, %{}, ""}}
 
@@ -131,12 +131,12 @@ defmodule Mux.ServerTest do
                             {:send, 1, {:transmit_dispatch, %{}, "", %{}, "2"}}])
 
     assert_receive {task1, :handle, {%{}, "", %{}, "1"}}
-    send(task1, {self(), :nack})
+    send(task1, {self(), {:nack, %{}}})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :nack, %{}, ""}}
 
     assert_receive {task2, :handle, {%{}, "", %{}, "2"}}
-    send(task2, {self(), :nack})
+    send(task2, {self(), {:nack, %{}}})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :nack, %{}, ""}}
 
@@ -157,7 +157,7 @@ defmodule Mux.ServerTest do
     assert_receive {^cli, {:packet, 1}, :receive_discarded}
     refute Process.alive?(task1)
 
-    send(task2, {self(), :nack})
+    send(task2, {self(), {:nack, %{}}})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :nack, %{}, ""}}
 

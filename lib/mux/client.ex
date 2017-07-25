@@ -21,9 +21,9 @@ defmodule Mux.Client do
 
   @type result ::
     {:ok, Mux.Packet.context, body :: binary} |
-    {:error, Mux.Packet.context, %Mux.ApplicationError{}}
+    {:error, Mux.Packet.context, %Mux.ApplicationError{}} |
+    {:nack, Mux.Packet.context} |
     {:error, %Mux.ServerError{}}
-    :nack
 
   @spec sync_dispatch(client, Mux.Packet.context, Mux.Packet.dest,
         Mux.Packet.dest_table, body :: binary, timeout) :: result
@@ -165,14 +165,14 @@ defmodule Mux.Client do
   defp reply(from, :error, context, why),
     do: {:reply, from, {:error, context, Mux.ApplicationError.exception(why)}}
 
-  defp reply(from, :nack, _context, _body),
-    do: reply_nack(from)
+  defp reply(from, :nack, context, _body),
+    do: reply_nack(from, context)
 
   defp reply_error(from, err),
     do: {:reply, from, {:error, err}}
 
-  defp reply_nack(from),
-    do: {:reply, from, :nack}
+  defp reply_nack(from, context),
+    do: {:reply, from, {:nack, context}}
 
   defp receive_pop(tag, state) do
     %State{tags: tags, exchanges: exchanges, monitors: monitors,
@@ -202,7 +202,8 @@ defmodule Mux.Client do
           clients: clients} = state
     case tags_pop(tags) do
       {nil, _} ->
-        {[reply_nack(from)], state}
+        # consider adding MuxFailure flag to context of noop nack
+        {[reply_nack(from, %{})], state}
       {tag, tags} ->
         {pid, ref} = from
         mon = Process.monitor(pid)

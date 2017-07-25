@@ -18,9 +18,9 @@ defmodule Mux.Server do
   @type option :: Mux.Connection.option | {:session_size, pos_integer}
   @type result ::
     {:ok, Mux.Packet.context, body :: binary} |
-    {:error, Mux.Packet.context, %Mux.ApplicationError{}}
+    {:error, Mux.Packet.context, %Mux.ApplicationError{}} |
+    {:nack, Mux.Packet.context} |
     {:error, %Mux.ServerError{}}
-    :nack
 
   @callback handle(Mux.Packet.context, Mux.Packet.dest, Mux.Packet.dest_table,
             body :: binary, state) :: result
@@ -124,7 +124,8 @@ defmodule Mux.Server do
       tasks = Map.put(tasks, pid, tag)
       {[], %State{state | exchanges: exchanges, tasks: tasks}}
     else
-      {[receive_dispatch_nack(tag)], state}
+      # consider adding MuxFailure flag to context of noop nack
+      {[receive_dispatch_nack(tag, %{})], state}
     end
   end
 
@@ -142,8 +143,8 @@ defmodule Mux.Server do
         dispatch_result(ref, error)
       {:error, %Mux.ServerError{}} = error ->
         dispatch_result(ref, error)
-      :nack ->
-        dispatch_result(ref, :nack)
+      {:nack, _context} = nack ->
+        dispatch_result(ref, nack)
     end
   end
 
@@ -196,8 +197,8 @@ defmodule Mux.Server do
         {[receive_dispatch_error(tag, context, msg)], state}
       {:error, %Mux.ServerError{message: msg}} ->
         {[receive_error(tag, msg)], state}
-      :nack ->
-        {[receive_dispatch_nack(tag)], state}
+      {:nack, context} ->
+        {[receive_dispatch_nack(tag, context)], state}
     end
   end
 
@@ -207,8 +208,8 @@ defmodule Mux.Server do
   defp receive_dispatch_error(tag, context, why),
     do: receive_dispatch(tag, :error, context, why)
 
-  defp receive_dispatch_nack(tag),
-    do: receive_dispatch(tag, :nack, %{}, "")
+  defp receive_dispatch_nack(tag, context),
+    do: receive_dispatch(tag, :nack, context, "")
 
   defp receive_dispatch(tag, status, context, body),
     do: {:send, tag, {:receive_dispatch, status, context, body}}

@@ -70,7 +70,7 @@ defmodule Mux.ClientTest do
 
     MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :nack, %{}, ""}}])
 
-    assert Task.await(task) == :nack
+    assert Task.await(task) == {:nack, %{}}
   end
 
   test "client cancels on dispatch timeout", %{client: cli, server: srv} do
@@ -174,9 +174,9 @@ defmodule Mux.ClientTest do
     ref1 = Mux.Client.async_dispatch(cli, %{}, "", %{}, "hello")
     assert_receive {^srv, {:packet, tag}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
 
-    assert Mux.Client.sync_dispatch(cli, %{}, "", %{}, "nacked") == :nack
+    assert Mux.Client.sync_dispatch(cli, %{}, "", %{}, "nacked") == {:nack, %{}}
     ref2 = Mux.Client.async_dispatch(cli, %{}, "", %{}, "nacked")
-    assert_receive {^ref2, :nack}
+    assert_receive {^ref2, {:nack, %{}}}
 
     MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :ok, %{}, "hi"}}])
 
@@ -196,7 +196,7 @@ defmodule Mux.ClientTest do
     assert_receive {^srv, {:packet, 0},
       {:transmit_discarded, ^tag, "test cancels"}}
 
-    assert Mux.Client.sync_dispatch(cli, %{}, "", %{}, "nacked") == :nack
+    assert Mux.Client.sync_dispatch(cli, %{}, "", %{}, "nacked") == {:nack, %{}}
 
     MuxProxy.commands(srv, [{:send, tag, :receive_discarded},
                             {:send, 1, :transmit_ping}])
