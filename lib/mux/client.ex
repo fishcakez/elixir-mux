@@ -10,14 +10,20 @@ defmodule Mux.Client do
 
   defmodule State do
     @moduledoc false
-    @enforce_keys [:tags, :exchanges, :monitors, :refs, :socket]
-    defstruct [:tags, :exchanges, :monitors, :refs, :socket]
+    @enforce_keys [:tags, :exchanges, :monitors, :refs, :socket, :ping]
+    defstruct [:tags, :exchanges, :monitors, :refs, :socket, :ping]
   end
 
   @discarded_message "process discarded"
+  @session_size 32
+  @ping_interval 5_000
+  @ping_tag 1
 
   @type client :: Mux.Connection.connection
-  @type option :: Mux.Connection.option | {:session_size, pos_integer}
+  @type option ::
+    Mux.Connection.option |
+    {:session_size, pos_integer} |
+    {:ping_interval, timeout}
 
   @type result ::
     {:ok, Mux.Packet.context, body :: binary} |
@@ -55,16 +61,17 @@ defmodule Mux.Client do
 
   @spec enter_loop(:gen_tcp.socket, [option]) :: no_return
   def enter_loop(sock, opts) do
-    {session_size, conn_opts} = Keyword.pop(opts, :session_size, 32)
-    Mux.Connection.enter_loop(__MODULE__, sock, {sock, session_size}, conn_opts)
+    {cli_opts, conn_opts} = Keyword.split(opts, [:session_size, :ping_interval])
+    Mux.Connection.enter_loop(__MODULE__, sock, {sock, cli_opts}, conn_opts)
   end
 
   @doc false
-  def init({sock, session_size})
-      when session_size > 0 and session_size < 0x80_FF_FF do
-    tags = tags_new(1..session_size)
+  def init({sock, opts}) do
+    session_size = Keyword.get(opts, :session_size, @session_size)
+    ping_interval = Keyword.get(opts, :ping_interval, @ping_interval)
+    tags = tags_new(session_size)
     state = %State{tags: tags, exchanges: %{}, monitors: %{}, refs: %{},
-                   socket: sock}
+                   socket: sock, ping: start_interval(ping_interval)}
     {[], state}
   end
 
@@ -93,6 +100,13 @@ defmodule Mux.Client do
   def handle(:info, {:DOWN, mon, _, _, _}, state) do
     handle_down(mon, state)
   end
+  def handle(:info, {:timeout, ping, interval}, %State{ping: ping} = state) do
+    handle_ping(interval, state)
+  end
+  def handle(:info, {:timeout, ping, _}, %State{ping: {_tag, ping}}) do
+    # no response from last ping
+    exit({:tcp_error, :timeout})
+  end
   def handle(:info, :shutdown_write, state) do
     {[], check_drain(state)}
   end
@@ -110,6 +124,9 @@ defmodule Mux.Client do
   # server will likely nack at some point if it requires a lease
   defp handle_packet(0, _cast, state),
     do: {[], state}
+  # ping came back before next ping was due to be sent
+  defp handle_packet(tag, :receive_ping, %State{ping: {tag, ping}} = state),
+    do: {[], %State{state | ping: ping}}
   defp handle_packet(tag, packet, state) do
     case packet do
       {:receive_dispatch, status, context, body} ->
@@ -270,7 +287,12 @@ defmodule Mux.Client do
     end
   end
 
-  # set a fake tags so no new tags can be assigned and so no new dispatches,
+  defp handle_ping(ping_interval, state) do
+    state = %State{state | ping: {@ping_tag, start_interval(ping_interval)}}
+    {[transmit_ping(@ping_tag)], state}
+  end
+
+  # set fake tags so no new tags can be assigned and so no new dispatches
   defp handle_drain(tag, %State{exchanges: exchanges} = state) do
     if map_size(exchanges) == 0 do
         # delay shutting down write so that receive_drain is sent to server
@@ -286,11 +308,15 @@ defmodule Mux.Client do
   defp transmit_discarded(tag, why),
     do: {:send, 0, {:transmit_discarded, tag, why}}
 
+  defp transmit_ping(tag),
+    do: {:send, tag, :transmit_ping}
+
   defp receive_drain(tag),
     do: {:send, tag, :receive_drain}
 
-  defp tags_new(range) do
-    range
+  # start from 2 as 1 is used for pings
+  defp tags_new(session_size) do
+    2..session_size+1
     |> Enum.to_list()
     |> :gb_sets.from_list()
   end
@@ -309,5 +335,13 @@ defmodule Mux.Client do
       # should reuse smallest tags
       :gb_sets.take_smallest(tags)
     end
+  end
+
+  defp start_interval(:infinity),
+    do: make_ref()
+  defp start_interval(interval) do
+    # randomise uniform around [0.5 interval, 1.5 interval]
+    delay = div(interval, 2) + :rand.uniform(interval + 1) - 1
+    :erlang.start_timer(delay, self(), interval)
   end
 end

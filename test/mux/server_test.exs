@@ -3,8 +3,11 @@ defmodule Mux.ServerTest do
 
   setup context do
     session_size = context[:session_size] || 32
+    ping_interval = context[:ping_interval] || :infinity
     debug = context[:debug] || [:log]
-    {cli, srv} = pair([debug: debug, session_size: session_size])
+    opts = [debug: debug, session_size: session_size,
+            ping_interval: ping_interval]
+    {cli, srv} = pair(opts)
     {:ok, [client: cli, server: srv]}
   end
 
@@ -203,6 +206,28 @@ defmodule Mux.ServerTest do
       {:receive_dispatch, :ok, %{}, "hello"}}
   end
 
+  @tag ping_interval: 50
+  @tag :capture_log
+  test "server pings multiple times", %{client: cli} do
+    assert_receive {^cli, {:packet, tag}, :transmit_ping}
+    MuxProxy.commands(cli, [{:send, tag, :receive_ping}])
+    assert_receive {^cli, {:packet, tag}, :transmit_ping}
+    MuxProxy.commands(cli, [{:send, tag, :receive_ping}])
+  end
+
+  @tag ping_interval: 10
+  @tag :capture_log
+  @tag debug: []
+  test "server closes connection if no ping response", context do
+    %{client: cli, server: srv} = context
+    Process.flag(:trap_exit, true)
+
+    assert_receive {^cli, {:packet, _}, :transmit_ping}
+
+    assert_receive {:EXIT, ^cli, {:tcp_error, :closed}}
+    assert_received {^cli, :terminate, {:tcp_error, :closed}}
+    assert_receive {:EXIT, ^srv, {:tcp_error, :timeout}}
+  end
   ## Helpers
 
   defp pair(opts) do

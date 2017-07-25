@@ -8,17 +8,25 @@ defmodule Mux.Server do
 
   @behaviour Mux.Connection
 
-  @drain_tag 1
-
   defmodule State do
     @moduledoc false
-    @enforce_keys [:exchanges, :tasks, :session_size, :handler, :ref, :drain]
-    defstruct [:exchanges, :tasks, :session_size, :handler, :ref, :drain]
+    @enforce_keys [:exchanges, :tasks, :session_size, :handler, :ref, :drain,
+                   :ping]
+    defstruct [:exchanges, :tasks, :session_size, :handler, :ref, :drain, :ping]
   end
+
+  @session_size 32
+  @ping_interval 5_000
+  @ping_tag 1
+  @drain_tag 2
 
   @type state :: any
   @type server :: Mux.Connection.connection
-  @type option :: Mux.Connection.option | {:session_size, pos_integer}
+  @type option ::
+    Mux.Connection.option |
+    {:session_size, pos_integer} |
+    {:ping_interval, timeout}
+
   @type result ::
     {:ok, Mux.Packet.context, body :: binary} |
     {:error, Mux.Packet.context, %Mux.ApplicationError{}} |
@@ -34,16 +42,20 @@ defmodule Mux.Server do
 
   @spec enter_loop(module, :gen_tcp.socket, state, [option]) :: no_return
   def enter_loop(mod, sock, state, opts) do
-    {session_size, conn_opts} = Keyword.pop(opts, :session_size, 32)
-    arg = {{mod, state}, session_size}
+    {cli_opts, conn_opts} = Keyword.split(opts, [:session_size, :ping_interval])
+    arg = {{mod, state}, cli_opts}
     Mux.Connection.enter_loop(__MODULE__, sock, arg, conn_opts)
   end
 
   @doc false
-  def init({handler, session_size}) do
+  def init({handler, opts}) do
     Process.flag(:trap_exit, true)
+    session_size = Keyword.get(opts, :session_size, @session_size)
+    ping_interval = Keyword.get(opts, :ping_interval, @ping_interval)
     state = %State{exchanges: %{}, tasks: %{}, session_size: session_size,
-                   handler: handler, ref: make_ref(), drain: false}
+                   handler: handler, ref: make_ref(), drain: false,
+                   ping: start_interval(ping_interval)}
+
     {[], state}
   end
 
@@ -53,6 +65,13 @@ defmodule Mux.Server do
   end
   def handle(:info, {:EXIT, pid, reason}, state) do
     handle_exit(pid, reason, state)
+  end
+  def handle(:info, {:timeout, ping, interval}, %State{ping: ping} = state) do
+    handle_ping(interval, state)
+  end
+  def handle(:info, {:timeout, ping, _}, %State{ping: {_tag, ping}}) do
+    # no response from last ping
+    exit({:tcp_error, :timeout})
   end
   def handle(:info, msg, state) do
     :error_logger.error_msg("#{__MODULE__} received unexpected message: ~p~n",
@@ -81,6 +100,9 @@ defmodule Mux.Server do
     do: handle_discarded(tag, state)
   defp handle_packet(0, _cast, state),
     do: {[], state}
+  # ping came back before next ping was due to be sent
+  defp handle_packet(tag, :receive_ping, %State{ping: {tag, ping}} = state),
+    do: {[], %State{state | ping: ping}}
   # check to see if sent drain request, wait for client to close
   defp handle_packet(tag, :receive_drain, %State{drain: tag} = state),
     do: {[], %State{state | drain: true}}
@@ -214,11 +236,19 @@ defmodule Mux.Server do
     end
   end
 
+  defp handle_ping(ping_interval, state) do
+    state = %State{state | ping: {@ping_tag, start_interval(ping_interval)}}
+    {[transmit_ping(@ping_tag)], state}
+  end
+
   # only send drain if haven't already
   defp handle_drain(%State{drain: false} = state),
     do: {[transmit_drain(@drain_tag)], %State{state | drain: @drain_tag}}
   defp handle_drain(state),
     do: {[], state}
+
+  defp transmit_ping(tag),
+    do: {:send, tag, :transmit_ping}
 
   defp transmit_drain(tag),
     do: {:send, tag, :transmit_drain}
@@ -246,4 +276,12 @@ defmodule Mux.Server do
 
   defp receive_ping(tag),
     do: {:send, tag, :receive_ping}
+
+  defp start_interval(:infinity),
+    do: make_ref()
+  defp start_interval(interval) do
+    # randomise uniform around [0.5 interval, 1.5 interval]
+    delay = div(interval, 2) + :rand.uniform(interval + 1) - 1
+    :erlang.start_timer(delay, self(), interval)
+  end
 end
