@@ -1,4 +1,6 @@
 defmodule MuxProxy do
+  @behaviour Mux.Connection
+
   def commands(pid, commands),
     do: send(pid, {:commands, commands})
 
@@ -28,6 +30,32 @@ defmodule MuxProxy do
 
   def terminate(reason, parent),
     do: send(parent, {self(), :terminate, reason})
+end
+
+defmodule MuxServerProxy do
+  @behaviour Mux.Server
+
+  def spawn_link(socket, opts) do
+    pid = :proc_lib.spawn_link(__MODULE__, :init_it, [self(), opts])
+    :ok = :gen_tcp.controlling_process(socket, pid)
+    send(pid, {self(), socket})
+    pid
+  end
+
+  def init_it(parent, opts) do
+    receive do
+      {^parent, socket} ->
+        Mux.Server.enter_loop(__MODULE__, socket, parent, opts)
+    end
+  end
+
+  def handle(context, dest, dest_tab, body, parent) do
+    send(parent, {self(), :handle, {context, dest, dest_tab, body}})
+    receive do
+      {^parent, result} ->
+        result
+    end
+  end
 end
 
 defmodule MuxData do
