@@ -82,6 +82,66 @@ defmodule Mux.ClientTest do
       {:transmit_discarded, ^tag, "process discarded"}}
   end
 
+  test "client cancels and ignores ok result", %{client: cli, server: srv} do
+    ref = Mux.Client.async_dispatch(cli, %{}, "", %{}, "hello")
+    assert_receive {^srv, {:packet, tag}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
+    assert Mux.Client.cancel(cli, ref, "test cancels") == :ok
+    assert_receive {^srv, {:packet, 0},
+      {:transmit_discarded, ^tag, "test cancels"}}
+
+    MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :ok, %{}, ""}},
+                            {:send, 1, :transmit_ping}])
+
+    assert_receive {^srv, {:packet, 1}, :receive_ping}
+
+    refute_received _
+  end
+
+  test "client cancels and ignores nack", %{client: cli, server: srv} do
+    ref = Mux.Client.async_dispatch(cli, %{}, "", %{}, "hello")
+    assert_receive {^srv, {:packet, tag}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
+    assert Mux.Client.cancel(cli, ref, "test cancels") == :ok
+    assert_receive {^srv, {:packet, 0},
+      {:transmit_discarded, ^tag, "test cancels"}}
+
+    MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :nack, %{}, ""}},
+                            {:send, 1, :transmit_ping}])
+
+    assert_receive {^srv, {:packet, 1}, :receive_ping}
+
+    refute_received _
+  end
+
+  test "client cancels and ignores app error", %{client: cli, server: srv} do
+    ref = Mux.Client.async_dispatch(cli, %{}, "", %{}, "hello")
+    assert_receive {^srv, {:packet, tag}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
+    assert Mux.Client.cancel(cli, ref, "test cancels") == :ok
+    assert_receive {^srv, {:packet, 0},
+      {:transmit_discarded, ^tag, "test cancels"}}
+
+    MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :error, %{}, "bad"}},
+                            {:send, 1, :transmit_ping}])
+
+    assert_receive {^srv, {:packet, 1}, :receive_ping}
+
+    refute_received _
+  end
+
+  test "client cancels and ignores server error", %{client: cli, server: srv} do
+    ref = Mux.Client.async_dispatch(cli, %{}, "", %{}, "hello")
+    assert_receive {^srv, {:packet, tag}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
+    assert Mux.Client.cancel(cli, ref, "test cancels") == :ok
+    assert_receive {^srv, {:packet, 0},
+      {:transmit_discarded, ^tag, "test cancels"}}
+
+    MuxProxy.commands(srv, [{:send, tag, {:receive_error, "oops"}},
+                            {:send, 1, :transmit_ping}])
+
+    assert_receive {^srv, {:packet, 1}, :receive_ping}
+
+    refute_received _
+  end
+
   test "client cancels on explicit cancel and reuses tag", context do
     %{client: cli, server: srv} = context
 
