@@ -18,6 +18,18 @@ defmodule Mux.Connection do
     defstruct [:mod, :sock, :state, :frame_size, :acks, :discards, :fragments]
   end
 
+  @socket_options [
+    # for packet parsing
+    packet: 4, mode: :binary,
+    # for exit reason as econnreset is abnormal exit
+    show_econnreset: true,
+    # ensure first timeout closes socket to prevent undefined behaviour with
+    # async send technique
+    send_timeout_close: true,
+    # connections may enter half-close (client shuts down write and waits for
+    # server to close
+    exit_on_close: false]
+
   @type connection :: :gen_statem.server_ref
   @type option ::
     :gen_statem.debug_opt |
@@ -26,7 +38,7 @@ defmodule Mux.Connection do
     {:frame_size, pos_integer | :infinity}
 
   @type command ::
-    {:frame_size, pos_integer} |
+    {:frame_size, pos_integer | :infinity} |
     {:reply, from, any} |
     {:send, Mux.Packet.tag, Mux.Packet.t}
 
@@ -57,6 +69,10 @@ defmodule Mux.Connection do
   end
 
   @doc false
+  def init(_),
+    do: {:stop, :enter_loop}
+
+  @doc false
   def callback_mode(), do: :state_functions
 
   @doc false
@@ -79,8 +95,20 @@ defmodule Mux.Connection do
   def code_change(_, state, data, _),
     do: {:ok, state, data}
 
-  def terminate(reason, :ready, %Data{mod: mod, state: state}),
-    do: apply(mod, :terminate, [reason, state])
+
+  @doc false
+  def terminate(:normal, _, %Data{acks: acks, fragments: fragments} = data) do
+    if :queue.is_empty(acks) and map_size(fragments) === 0 do
+      terminate(:normal, data)
+    else
+      # have not finished sending or receiving data
+      reason = {:tcp_error, :closed}
+      terminate(reason, data)
+      exit(reason)
+    end
+  end
+  def terminate(reason, _, data),
+    do: terminate(reason, data)
 
   ## Helpers
 
@@ -93,12 +121,12 @@ defmodule Mux.Connection do
     case frame_size do
       :infinity ->
         # can ignore error as will get :tcp_error/:tcp_closed message
-        _ = :inet.setopts(sock, [packet_size: 0])
+        :ok = :inet.setopts(sock, [packet_size: 0] ++ @socket_options)
         {:keep_state, %Data{data | frame_size: :infinity}}
       _ when is_integer(frame_size) and frame_size > 0 ->
         # 4 for size, 1 for type and 3 for tag
         packet_size = max(frame_size + 4 + 1 + 3, 0xFFFF)
-        _ = :inet.setopts(sock, [packet_size: packet_size])
+        :ok = :inet.setopts(sock, [packet_size: packet_size] ++ @socket_options)
         {:keep_state, %Data{data | frame_size: frame_size}}
     end
   end
@@ -115,7 +143,7 @@ defmodule Mux.Connection do
     parse(binary, data)
   end
   defp info({:tcp_passive, sock}, %Data{sock: sock}) do
-    case :inet.setopts(sock, [mode: :binary, active: 32, packet: 4]) do
+    case :inet.setopts(sock, [active: 32]) do
       :ok ->
         :keep_state_and_data
       {:error, reason} ->
@@ -125,7 +153,7 @@ defmodule Mux.Connection do
   defp info({:tcp_error, sock, reason}, %Data{sock: sock}),
     do: {:stop, {:tcp_error, reason}}
   defp info({:tcp_closed, sock}, %Data{sock: sock}),
-    do: {:stop, {:tcp_error, :closed}}
+    do: {:stop, :normal}
   defp info({:EXIT, sock, reason}, %Data{sock: sock}),
     do: {:stop, {:tcp_error, reason}}
   defp info(msg, data),
@@ -137,14 +165,10 @@ defmodule Mux.Connection do
   end
 
   defp init_actions(sock, commands, opts) do
-    # fake passive msg to ensure active, if passive already will sync later
-    actions = [{:next_event, :info, {:tcp_passive, sock}} | actions(commands)]
-    case Keyword.fetch(opts, :frame_size) do
-      {:ok, frame_size} ->
-        actions([{:frame_size, frame_size}]) ++ actions
-      :error ->
-        actions
-    end
+    [{:next_event, :internal, {:frame_size, opts[:frame_size] || :infinity}},
+     # fake passive msg to ensure active, if passive already will sync later
+     {:next_event, :info, {:tcp_passive, sock}} |
+     actions(commands)]
   end
 
   defp actions(commands) do
@@ -385,4 +409,7 @@ defmodule Mux.Connection do
         :nosplit
     end
   end
+
+  defp terminate(reason, %Data{mod: mod, state: state}),
+    do: apply(mod, :terminate, [reason, state])
 end

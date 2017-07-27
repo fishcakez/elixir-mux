@@ -56,6 +56,7 @@ defmodule Mux.ServerTest do
   end
 
   @tag :capture_log
+  @tag debug: []
   test "server dispatch returns server error on bad return", %{client: cli} do
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "hi"}}])
     assert_receive {task, :dispatch, {%{}, "", %{}, "hi"}}
@@ -208,7 +209,6 @@ defmodule Mux.ServerTest do
   end
 
   @tag session_opts: [ping_interval: 50]
-  @tag :capture_log
   test "server pings multiple times", %{client: cli} do
     assert_receive {^cli, {:packet, tag}, :transmit_ping}
     MuxProxy.commands(cli, [{:send, tag, :receive_ping}])
@@ -225,8 +225,8 @@ defmodule Mux.ServerTest do
 
     assert_receive {^cli, {:packet, _}, :transmit_ping}
 
-    assert_receive {:EXIT, ^cli, {:tcp_error, :closed}}
-    assert_received {^cli, :terminate, {:tcp_error, :closed}}
+    assert_receive {:EXIT, ^cli, :normal}
+    assert_received {^cli, :terminate, :normal}
     assert_receive {:EXIT, ^srv, {:tcp_error, :timeout}}
     assert_received {^srv, :terminate, {:tcp_error, :timeout}}
   end
@@ -273,6 +273,25 @@ defmodule Mux.ServerTest do
     send(srv, {self(), {:nack, %{"busy" => "sorry"}}})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :nack, %{"busy" => "sorry"}, ""}}
+  end
+
+  @tag :capture_log
+  @tag debug: []
+  test "server exits abnormally if handling dispatch on close", context do
+    %{client: cli, server: srv} = context
+    Process.flag(:trap_exit, true)
+
+    MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "hello", %{}, "world"}}])
+    assert_receive {_task, :dispatch, {%{}, "hello", %{}, "world"}}
+
+    # close cli while srv is handling a response
+    GenServer.stop(cli)
+
+    assert_receive {:EXIT, ^srv, {:tcp_error, :closed}}
+    assert_received {^srv, :terminate, {:tcp_error, :closed}}
+
+    assert_receive {:EXIT, ^cli, :normal}
+    assert_received {^cli, :terminate, :normal}
   end
 
   ## Helpers

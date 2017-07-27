@@ -30,8 +30,6 @@ defmodule Mux.IntegrationTest do
     assert_receive {:DOWN, ^mon, _, _, :killed}
   end
 
-  @tag :capture_log
-  @tag debug: []
   test "server drain causes close after tasks handled", context do
     %{client: cli, server: srv} = context
 
@@ -59,8 +57,8 @@ defmodule Mux.IntegrationTest do
     send(task2, {self(), {:ok, %{}, "two"}})
     assert_receive {^ref2, {:ok, %{}, "two"}}
 
-    assert_receive {:EXIT, ^cli, {:tcp_error, :closed}}
-    assert_receive {:EXIT, ^srv, {:tcp_error, :closed}}
+    assert_receive {:EXIT, ^cli, :normal}
+    assert_receive {:EXIT, ^srv, :normal}
   end
 
   ## Helpers

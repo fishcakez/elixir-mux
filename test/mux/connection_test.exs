@@ -247,8 +247,6 @@ defmodule Mux.ConnectionTest do
     end
   end
 
-  @tag :capture_log
-  @tag debug: []
   test "connection detects close", %{client: cli, server: srv} do
     Process.flag(:trap_exit, true)
 
@@ -256,8 +254,8 @@ defmodule Mux.ConnectionTest do
     assert_receive {:EXIT, ^cli, :normal}
     assert_received {^cli, :terminate, :normal}
 
-    assert_receive {:EXIT, ^srv, {:tcp_error, :closed}}
-    assert_received {^srv, :terminate, {:tcp_error, :closed}}
+    assert_receive {:EXIT, ^srv, :normal}
+    assert_received {^srv, :terminate, :normal}
   end
 
   @tag :capture_log
@@ -271,6 +269,30 @@ defmodule Mux.ConnectionTest do
 
     assert_receive {:EXIT, ^cli, {:tcp_error, :emsgsize}}
     assert_received {^cli, :terminate, {:tcp_error, :emsgsize}}
+
+    assert_receive {:EXIT, ^srv, {:tcp_error, :econnreset}}
+    assert_received {^srv, :terminate, {:tcp_error, :econnreset}}
+  end
+
+  @tag :capture_log
+  @tag debug: []
+  test "connection exits abnormally if send/recv fragments on close", context do
+    %{client: cli, server: srv} = context
+    Process.flag(:trap_exit, true)
+
+    big = :binary.copy("big", 0xFF_FF_FF)
+    MuxProxy.commands(cli, [{:frame_size, 2},
+                            {:send, 1, {:transmit_dispatch, %{}, "", %{}, big}},
+                            {:send, 2, :transmit_ping}])
+    assert_receive {^srv, {:packet, 2}, :transmit_ping}
+    {:ready, %{sock: srv_sock}} = :sys.get_state(srv)
+    # this will cause cli to get tcp_closed and it should have plenty of data
+    # left to send so will close abnormally, similar srv will then see a
+    # tcp_closed and have fragments to recv
+    :gen_tcp.shutdown(srv_sock, :write)
+
+    assert_receive {:EXIT, ^cli, {:tcp_error, :closed}}
+    assert_received {^cli, :terminate, {:tcp_error, :closed}}
 
     assert_receive {:EXIT, ^srv, {:tcp_error, :closed}}
     assert_received {^srv, :terminate, {:tcp_error, :closed}}

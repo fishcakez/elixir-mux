@@ -101,6 +101,13 @@ defmodule Mux.Server do
     do: handle_drain(state)
 
   @doc false
+  def terminate(:normal, %State{tasks: tasks} = state)
+      when map_size(tasks) > 0 do
+    # still handling dispatches so not a clean stop
+    reason = {:tcp_error, :closed}
+    terminate(reason, state)
+    exit(reason)
+  end
   def terminate(reason, %State{tasks: tasks, handler: handler}) do
     pids = Map.keys(tasks)
     for pid <- pids do
@@ -112,7 +119,7 @@ defmodule Mux.Server do
           :ok
       end
     end
-  handler_terminate(reason, handler)
+    handler_terminate(reason, handler)
   end
 
   # 0 tag is a one way, only handle one-way transmit_discard

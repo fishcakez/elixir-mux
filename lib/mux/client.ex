@@ -143,6 +143,13 @@ defmodule Mux.Client do
   end
 
   @doc false
+  def terminate(:normal, %State{exchanges: exchanges} = state)
+      when map_size(exchanges) > 0 do
+    # awaiting a responses so not a clean stop
+    reason = {:tcp_error, :closed}
+    terminate(reason, state)
+    exit(reason)
+  end
   def terminate(reason, %State{handler: handler}),
     do: handler_terminate(reason, handler)
 

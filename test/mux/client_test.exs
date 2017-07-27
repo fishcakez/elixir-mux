@@ -221,7 +221,6 @@ defmodule Mux.ClientTest do
   end
 
   @tag session_opts: [ping_interval: 50]
-  @tag :capture_log
   test "client pings multiple times", %{server: srv} do
     assert_receive {^srv, {:packet, tag}, :transmit_ping}
     MuxProxy.commands(srv, [{:send, tag, :receive_ping}])
@@ -238,8 +237,8 @@ defmodule Mux.ClientTest do
 
     assert_receive {^srv, {:packet, _}, :transmit_ping}
 
-    assert_receive {:EXIT, ^srv, {:tcp_error, :closed}}
-    assert_received {^srv, :terminate, {:tcp_error, :closed}}
+    assert_receive {:EXIT, ^srv, :normal}
+    assert_received {^srv, :terminate, :normal}
     assert_receive {:EXIT, ^cli, {:tcp_error, :timeout}}
     assert_received {^cli, :terminate, {:tcp_error, :timeout}}
   end
@@ -249,8 +248,6 @@ defmodule Mux.ClientTest do
     assert_receive {^cli, :lease, {:millisecond, 1000}}
   end
 
-  @tag :capture_log
-  @tag debug: []
   test "client shutdowns on drain if no exchanges", context do
     %{client: cli, server: srv} = context
     Process.flag(:trap_exit, true)
@@ -260,14 +257,12 @@ defmodule Mux.ClientTest do
     send(cli, {self(), {:ok, self()}})
     assert_receive {^srv, {:packet, 1}, :receive_drain}
 
-    assert_receive {:EXIT, ^srv, {:tcp_error, :closed}}
-    assert_received {^srv, :terminate, {:tcp_error, :closed}}
-    assert_receive {:EXIT, ^cli, {:tcp_error, :closed}}
-    assert_received {^cli, :terminate, {:tcp_error, :closed}}
+    assert_receive {:EXIT, ^srv, :normal}
+    assert_received {^srv, :terminate, :normal}
+    assert_receive {:EXIT, ^cli, :normal}
+    assert_received {^cli, :terminate, :normal}
   end
 
-  @tag :capture_log
-  @tag debug: []
   test "client shutdowns on drain once last exchange responds", context do
     %{client: cli, server: srv} = context
     Process.flag(:trap_exit, true)
@@ -289,9 +284,10 @@ defmodule Mux.ClientTest do
 
     assert_receive {^ref1, {:ok, %{}, "ok"}}
 
-    assert_receive {:EXIT, ^srv, {:tcp_error, :closed}}
-    assert_received {^srv, :terminate, {:tcp_error, :closed}}
-    assert_receive {:EXIT, ^cli, {:tcp_error, :closed}}
+    assert_receive {:EXIT, ^srv, :normal}
+    assert_received {^srv, :terminate, :normal}
+    assert_receive {:EXIT, ^cli, :normal}
+    assert_received {^cli, :terminate, :normal}
   end
 
   test "client sends back error on init", %{server: srv} do
@@ -329,7 +325,7 @@ defmodule Mux.ClientTest do
 
     MuxProxy.commands(srv, [{:send, tag, {:receive_error, "oops"}}])
     assert_receive {^cli, :terminate, %Mux.ServerError{message: "oops"}}
-    assert_receive {^srv, :terminate, {:tcp_error, :closed}}
+    assert_receive {^srv, :terminate, :normal}
   end
 
   test "client sends back error on transmit dispatch/request", %{server: srv} do
@@ -341,6 +337,25 @@ defmodule Mux.ClientTest do
 
     assert_receive {^srv, {:packet, 2},
       {:receive_error, "can not handle dispatch"}}
+  end
+
+  @tag :capture_log
+  @tag debug: []
+  test "client exits abnormally if awaiting dispatch on close", context do
+    %{client: cli, server: srv} = context
+    Process.flag(:trap_exit, true)
+
+    _ = Mux.Client.async_dispatch(cli, %{}, "hello", %{}, "world")
+    assert_receive {^srv, {:packet, _}, {:transmit_dispatch, %{}, "hello", %{}, "world"}}
+
+    # close srv while cli is awaiting a response
+    GenServer.stop(srv)
+
+    assert_receive {:EXIT, ^cli, {:tcp_error, :closed}}
+    assert_received {^cli, :terminate, {:tcp_error, :closed}}
+
+    assert_receive {:EXIT, ^srv, :normal}
+    assert_received {^srv, :terminate, :normal}
   end
 
   ## Helpers
