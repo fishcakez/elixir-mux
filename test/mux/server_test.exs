@@ -23,7 +23,7 @@ defmodule Mux.ServerTest do
 
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, ctx, dest, dest_tab, body}}])
 
-    assert_receive {task, :handle, {^ctx, ^dest, ^dest_tab, ^body}}
+    assert_receive {task, :dispatch, {^ctx, ^dest, ^dest_tab, ^body}}
 
     send(task, {self(), {:ok, %{"e" => "f"}, "hi"}})
 
@@ -33,7 +33,7 @@ defmodule Mux.ServerTest do
 
   test "server dispatch returns nack response", %{client: cli} do
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "hi"}}])
-    assert_receive {task, :handle, {%{}, "", %{}, "hi"}}
+    assert_receive {task, :dispatch, {%{}, "", %{}, "hi"}}
     send(task, {self(), {:nack, %{"a" => "b"}}})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :nack, %{"a" => "b"}, ""}}
@@ -41,7 +41,7 @@ defmodule Mux.ServerTest do
 
   test "server dispatch returns app error response", %{client: cli} do
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "hi"}}])
-    assert_receive {task, :handle, {%{}, "", %{}, "hi"}}
+    assert_receive {task, :dispatch, {%{}, "", %{}, "hi"}}
     send(task, {self(), {:error, %{}, Mux.ApplicationError.exception("oops")}})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :error, %{}, "oops"}}
@@ -49,7 +49,7 @@ defmodule Mux.ServerTest do
 
   test "server dispatch returns server error response", %{client: cli} do
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "hi"}}])
-    assert_receive {task, :handle, {%{}, "", %{}, "hi"}}
+    assert_receive {task, :dispatch, {%{}, "", %{}, "hi"}}
     send(task, {self(), {:error, Mux.ServerError.exception("oops")}})
     assert_receive {^cli, {:packet, 1},
       {:receive_error, "oops"}}
@@ -58,7 +58,7 @@ defmodule Mux.ServerTest do
   @tag :capture_log
   test "server dispatch returns server error on bad return", %{client: cli} do
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "hi"}}])
-    assert_receive {task, :handle, {%{}, "", %{}, "hi"}}
+    assert_receive {task, :dispatch, {%{}, "", %{}, "hi"}}
     send(task, {self(), :bad_return})
     assert_receive {^cli, {:packet, 1},
       {:receive_error, "process exited"}}
@@ -66,7 +66,7 @@ defmodule Mux.ServerTest do
 
   test "server dispatch returns server error on task exit", %{client: cli} do
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "hi"}}])
-    assert_receive {task, :handle, {%{}, "", %{}, "hi"}}
+    assert_receive {task, :dispatch, {%{}, "", %{}, "hi"}}
     Process.exit(task, :die)
     assert_receive {^cli, {:packet, 1},
       {:receive_error, "process exited"}}
@@ -74,7 +74,7 @@ defmodule Mux.ServerTest do
 
   test "server handles discarding tag by killing task", %{client: cli} do
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "hi"}}])
-    assert_receive {task, :handle, {%{}, "", %{}, "hi"}}
+    assert_receive {task, :dispatch, {%{}, "", %{}, "hi"}}
 
     MuxProxy.commands(cli, [{:send, 0, {:transmit_discarded, 1, "bye!"}}])
     assert_receive {^cli, {:packet, 1}, :receive_discarded}
@@ -83,7 +83,7 @@ defmodule Mux.ServerTest do
 
   test "server handles discarding tag after response sent", %{client: cli} do
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "hi"}}])
-    assert_receive {task, :handle, {%{}, "", %{}, "hi"}}
+    assert_receive {task, :dispatch, {%{}, "", %{}, "hi"}}
 
     send(task, {self(), {:nack, %{}}})
     assert_receive {^cli, {:packet, 1},
@@ -96,13 +96,13 @@ defmodule Mux.ServerTest do
 
   test "server handles client reusing tag", %{client: cli} do
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "hi"}}])
-    assert_receive {task1, :handle, {%{}, "", %{}, "hi"}}
+    assert_receive {task1, :dispatch, {%{}, "", %{}, "hi"}}
     send(task1, {self(), {:nack, %{}}})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :nack, %{}, ""}}
 
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "hi again"}}])
-    assert_receive {task2, :handle, {%{}, "", %{}, "hi again"}}
+    assert_receive {task2, :dispatch, {%{}, "", %{}, "hi again"}}
     send(task2, {self(), {:ok, %{}, "success"}})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :ok, %{}, "success"}}
@@ -113,12 +113,12 @@ defmodule Mux.ServerTest do
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "1"}},
                             {:send, 1, {:transmit_dispatch, %{}, "", %{}, "2"}}])
 
-    assert_receive {task2, :handle, {%{}, "", %{}, "2"}}
+    assert_receive {task2, :dispatch, {%{}, "", %{}, "2"}}
     send(task2, {self(), {:nack, %{}}})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :nack, %{}, ""}}
 
-    assert_receive {task1, :handle, {%{}, "", %{}, "1"}}
+    assert_receive {task1, :dispatch, {%{}, "", %{}, "1"}}
     send(task1, {self(), {:nack, %{}}})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :nack, %{}, ""}}
@@ -132,12 +132,12 @@ defmodule Mux.ServerTest do
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "1"}},
                             {:send, 1, {:transmit_dispatch, %{}, "", %{}, "2"}}])
 
-    assert_receive {task1, :handle, {%{}, "", %{}, "1"}}
+    assert_receive {task1, :dispatch, {%{}, "", %{}, "1"}}
     send(task1, {self(), {:nack, %{}}})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :nack, %{}, ""}}
 
-    assert_receive {task2, :handle, {%{}, "", %{}, "2"}}
+    assert_receive {task2, :dispatch, {%{}, "", %{}, "2"}}
     send(task2, {self(), {:nack, %{}}})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :nack, %{}, ""}}
@@ -151,8 +151,8 @@ defmodule Mux.ServerTest do
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "1"}},
                             {:send, 1, {:transmit_dispatch, %{}, "", %{}, "2"}}])
 
-    assert_receive {task1, :handle, {%{}, "", %{}, "1"}}
-    assert_receive {task2, :handle, {%{}, "", %{}, "2"}}
+    assert_receive {task1, :dispatch, {%{}, "", %{}, "1"}}
+    assert_receive {task2, :dispatch, {%{}, "", %{}, "2"}}
 
     MuxProxy.commands(cli, [{:send, 0, {:transmit_discarded, 1, "oops"}}])
 
@@ -188,7 +188,7 @@ defmodule Mux.ServerTest do
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "1"}},
                             {:send, 2, {:transmit_dispatch, %{}, "", %{}, "2"}}])
 
-    assert_receive {task1, :handle, {%{}, "", %{}, "1"}}
+    assert_receive {task1, :dispatch, {%{}, "", %{}, "1"}}
 
     assert_receive {^srv, :nack, {%{}, "", %{}, "2"}}
     send(srv, {self(), {:nack, %{"busy" => "sorry"}}})
@@ -201,7 +201,7 @@ defmodule Mux.ServerTest do
 
     MuxProxy.commands(cli, [{:send, 3, {:transmit_dispatch, %{}, "", %{}, "3"}}])
 
-    assert_receive {task3, :handle, {%{}, "", %{}, "3"}}
+    assert_receive {task3, :dispatch, {%{}, "", %{}, "3"}}
     send(task3, {self(), {:ok, %{}, "hello"}})
     assert_receive {^cli, {:packet, 3},
       {:receive_dispatch, :ok, %{}, "hello"}}

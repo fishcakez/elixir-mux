@@ -17,14 +17,14 @@ defmodule Mux.IntegrationTest do
     body = "hello"
 
     ref = Mux.Client.async_dispatch(cli, ctx, dest, dest_tab, body)
-    assert_receive {task, :handle, {^ctx, ^dest, ^dest_tab, ^body}}
+    assert_receive {task, :dispatch, {^ctx, ^dest, ^dest_tab, ^body}}
     send(task, {self(), {:ok, %{"e" => "f"}, "hi"}})
     assert_receive {^ref, {:ok, %{"e" => "f"}, "hi"}}
   end
 
   test "client cancel kills task", %{client: cli} do
     ref = Mux.Client.async_dispatch(cli, %{}, "", %{}, "hi")
-    assert_receive {task, :handle, {%{}, "", %{}, "hi"}}
+    assert_receive {task, :dispatch, {%{}, "", %{}, "hi"}}
     mon = Process.monitor(task)
     assert Mux.Client.cancel(cli, ref) == :ok
     assert_receive {:DOWN, ^mon, _, _, :killed}
@@ -39,8 +39,8 @@ defmodule Mux.IntegrationTest do
 
     ref1 = Mux.Client.async_dispatch(cli, %{}, "dest", %{}, "1")
     ref2 = Mux.Client.async_dispatch(cli, %{}, "dest", %{}, "2")
-    assert_receive {task1, :handle, {%{}, "dest", %{}, "1"}}
-    assert_receive {task2, :handle, {%{}, "dest", %{}, "2"}}
+    assert_receive {task1, :dispatch, {%{}, "dest", %{}, "1"}}
+    assert_receive {task2, :dispatch, {%{}, "dest", %{}, "2"}}
 
     Mux.Server.drain(srv)
     assert_receive {^cli, :drain, nil}

@@ -47,7 +47,7 @@ defmodule Mux.Server do
     {:ok, Mux.Packet.headers, [session_option], state} |
     {:error, %Mux.ServerError{}, state}
 
-  @callback handle(Mux.Packet.context, Mux.Packet.dest, Mux.Packet.dest_table,
+  @callback dispatch(Mux.Packet.context, Mux.Packet.dest, Mux.Packet.dest_table,
             body :: binary, state) :: result
 
   @callback nack(Mux.Packet.context, Mux.Packet.dest, Mux.Packet.dest_table,
@@ -191,7 +191,7 @@ defmodule Mux.Server do
 
   defp start_task({mod, state}, ref, context, dest, dest_table, body) do
     args = [context, dest, dest_table, body, state]
-    Task.start_link(__MODULE__, :dispatch, [ref, mod, :handle, args])
+    Task.start_link(__MODULE__, :dispatch, [ref, mod, :dispatch, args])
   end
 
   @doc false

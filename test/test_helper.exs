@@ -116,8 +116,8 @@ defmodule MuxServerProxy do
     end
   end
 
-  def handle(context, dest, dest_tab, body, parent) do
-    send(parent, {self(), :handle, {context, dest, dest_tab, body}})
+  def dispatch(context, dest, dest_tab, body, parent) do
+    send(parent, {self(), :dispatch, {context, dest, dest_tab, body}})
     receive do
       {^parent, result} ->
         result
