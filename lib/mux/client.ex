@@ -257,7 +257,8 @@ defmodule Mux.Client do
   end
 
   # if drain and empty exchanges it's time to close the socket
-  def check_drain(%State{tags: :drain, exchanges: exchanges} = state) do
+  def check_drain(%State{tags: drain, exchanges: exchanges} = state)
+      when drain in [:handshake_drain, :drain] do
     case map_size(exchanges) do
       0 ->
         shutdown_write(state)
@@ -334,6 +335,10 @@ defmodule Mux.Client do
       %State{tags: :handshake, timer: {^tag, tref}} ->
         cancel_timer(tref)
         handshake(headers, state)
+      %State{tags: :handshake_drain, timer: {^tag, tref}} ->
+        cancel_timer(tref)
+        {actions, state} = handshake(headers, state)
+        {actions, %State{state | tags: :drain}}
       state ->
         {[receive_error(tag, "unexpected rinit")], state}
     end
@@ -385,8 +390,14 @@ defmodule Mux.Client do
   defp handle_lease(unit, timeout, %State{handler: handler} = state),
     do: {[], %State{state | handler: handler_lease(unit, timeout, handler)}}
 
+
+  defp handle_drain(tag, %State{tags: :handshake} = state),
+    do: handle_drain(tag, :handshake_drain, state)
+  defp handle_drain(tag, state),
+    do: handle_drain(tag, :drain, state)
+
   # set fake tags so no new tags can be assigned and so no new dispatches
-  defp handle_drain(tag, state) do
+  defp handle_drain(tag, tags, state) do
     %State{handler: handler, exchanges: exchanges} = state
     handler = handler_drain(handler)
     if map_size(exchanges) == 0 do
@@ -394,7 +405,7 @@ defmodule Mux.Client do
         # before shutting down socket
         send(self(), :shutdown_write)
     end
-    {[receive_drain(tag)], %State{state | tags: :drain, handler: handler}}
+    {[receive_drain(tag)], %State{state | tags: tags, handler: handler}}
   end
 
   defp transmit_dispatch(tag, context, dest, tab, body),

@@ -328,6 +328,28 @@ defmodule Mux.ClientTest do
     assert_receive {^srv, :terminate, :normal}
   end
 
+  @tag headers: %{"hello" => "world"}
+  test "client handles drain during handshake", context do
+    %{client: cli, server: srv} = context
+
+    assert_receive {^srv, {:packet, tag}, {:transmit_init, 1, %{"hello" => "world"}}}
+    MuxProxy.commands(srv, [{:send, 2, :transmit_drain},
+                            {:send, tag, {:receive_init, 1, %{"hi" => "drain"}}}])
+
+    assert_receive {^cli, :drain, nil}
+    send(cli, {self(), {:ok, self()}})
+    assert_receive {^srv, {:packet, 2}, :receive_drain}
+
+    assert_receive {^cli, :handshake, %{"hi" => "drain"}}
+    send(cli, {self(), {:ok, [], self()}})
+
+    assert_receive {^cli, :terminate, :normal}
+    assert_receive {^srv, :terminate, :normal}
+
+    refute_received {^cli, _, _}
+    refute_received {^srv, _, _}
+  end
+
   test "client sends back error on transmit dispatch/request", %{server: srv} do
     MuxProxy.commands(srv, [{:send, 1, {:transmit_request, %{}, ""}},
                             {:send, 2, {:transmit_dispatch, %{}, "", %{}, ""}}])
