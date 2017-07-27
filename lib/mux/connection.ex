@@ -29,6 +29,7 @@ defmodule Mux.Connection do
     {:frame_size, pos_integer} |
     {:reply, from, any} |
     {:send, Mux.Packet.tag, Mux.Packet.t}
+
   @type state :: any
   @type from :: :gen_statem.from
   @type event_type :: :cast | :info | {:call, from} | {:packet, Mux.Packet.tag}
@@ -175,6 +176,10 @@ defmodule Mux.Connection do
         send_split(:transmit, type, tag, iodata, data)
       {:receive_dispatch, _, _, _} ->
         send_split(:receive, type, tag, iodata, data)
+      {:transmit_init, _, _} ->
+        send_flush(type, tag, iodata, data)
+      {:receive_init, _, _} ->
+        send_flush(type, tag, iodata, data)
       _ ->
         send_full(type, tag, iodata, data)
     end
@@ -216,6 +221,47 @@ defmodule Mux.Connection do
     %Data{sock: sock} = data
     send(sock, {self(), {:command, [<<type::signed, 0::1, tag::23>> | iodata]}})
     {:keep_state, update_in(data.acks, &:queue.in(:noop, &1))}
+  end
+
+  defp send_flush(type, tag, iodata, data) do
+    case flush(data) do
+      {:keep_state, data} ->
+        send_full(type, tag, iodata, data)
+      {:stop, _} = stop ->
+        stop
+    end
+  end
+
+  # callback module wants to ensure all pending packets are ahead in the TCP
+  # stream, i.e. before it sends a transmit_init or receive_init. Run through
+  # the pending actions (as if ack'ed) until exhaustion, counting all the
+  # fake acks that occur and replace acks with noop of same queue as all actions
+  # handled.
+  defp flush(packets \\ 0, %Data{acks: acks} = data) do
+    if :queue.is_empty(acks) do
+      flush_rebuild(packets, data)
+    else
+      flush_ack(packets, data)
+    end
+  end
+
+  defp flush_ack(packets, data) do
+    case ack(data) do
+      {:keep_state, data} ->
+        flush(packets + 1, data)
+      {:stop, _reason} = stop ->
+        stop
+    end
+  end
+
+  # all ack functions handled so nothing to discard and every existing ack is a
+  # noop.
+  defp flush_rebuild(packets, data) do
+    noops =
+      :noop
+      |> List.duplicate(packets)
+      |> :queue.from_list()
+    {:keep_state, %Data{data | acks: noops, discards: %{}}}
   end
 
   defp ack(data) do
@@ -277,17 +323,21 @@ defmodule Mux.Connection do
     action = {:next_event, :internal, {:packet, tag, packet}}
     case packet do
       {:transmit_discarded, discard_tag, _} ->
-        transmit_discarded(tag, packet, discard_tag, data)
+        transmit_discarded(discard_tag, action, data)
       :receive_discarded ->
-        receive_discarded(tag, packet, data)
+        receive_discarded(tag, action, data)
       {:receive_error, _} ->
-        receive_discarded(tag, packet, data)
+        receive_discarded(tag, action, data)
+      {:transmit_init, _, _} ->
+        transmit_init(tag, action, data)
+      {:receive_init, _, _} ->
+        receive_init(action, data)
       _ ->
         {:keep_state, data, action}
     end
   end
 
-  defp transmit_discarded(tag, packet, discard_tag, data) do
+  defp transmit_discarded(discard_tag, action, data) do
     {sofar, data} = pop_in(data.fragments[{:transmit, discard_tag}])
     if sofar do
       # never finished reading the dispatch so reply with discarded without
@@ -297,14 +347,33 @@ defmodule Mux.Connection do
     else
       # either callback module is handling or it's unknown (possibly because was
       # already handled)
-      {:keep_state, data, {:next_event, :internal, {:packet, tag, packet}}}
+      {:keep_state, data, action}
     end
   end
 
-  defp receive_discarded(tag, packet, data) do
-    # remove pending fragmenrs on same tag
-    data = update_in(data.fragments, &Map.delete(&1, {:receive, tag}))
-    {:keep_state, data, {:next_event, :internal, {:packet, tag, packet}}}
+  defp receive_discarded(discard_tag, action, data) do
+    # remove pending fragments on same tag
+    data = update_in(data.fragments, &Map.delete(&1, {:receive, discard_tag}))
+    {:keep_state, data, action}
+  end
+
+  def transmit_init(tag, action, %Data{fragments: fragments} = data) do
+    if fragments === %{} do
+      {:keep_state, data, action}
+    else
+      # peer attempting to re-init connection but didn't clean up last
+      # session, tricky for callback modules to handle this situation in a sane
+      # manner as intentions of peer unclear
+      msg = "can not handle reinitializing session when incomplete fragments"
+      command = {:send, tag, {:receive_error, msg}}
+      {:keep_state, data, {:next_event, :internal, command}}
+    end
+  end
+
+  defp receive_init(action, data) do
+    # remove all pending fragments (transmit and receive) as peer has reset all
+    # it's known tags with this packet
+    {:keep_state, %Data{data | fragments: %{}}, action}
   end
 
   defp split(iodata, max) do

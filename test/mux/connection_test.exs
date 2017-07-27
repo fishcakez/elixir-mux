@@ -168,13 +168,72 @@ defmodule Mux.ConnectionTest do
                             {:send, 1, transmit_dispatch},
                             {:send, 0, transmit_discarded},
                             {:send, 1, transmit_dispatch},
-                            {:send, 3, {:transmit_init, 1, %{}}}])
+                            {:send, 3, :transmit_ping}])
 
-    assert_receive {^srv, {:packet, 3}, {:transmit_init, 1, %{}}}
+    assert_receive {^srv, {:packet, 3}, :transmit_ping}
     assert_receive {^srv, {:packet, 1}, ^transmit_dispatch}
     refute_received {^srv, {:packet, _}, _}
     assert_receive {^cli, {:packet, 1}, :receive_discarded}
     assert_receive {^cli, {:packet, 1}, :receive_discarded}
+  end
+
+  test "transmit_init flushes transmit_dispatch", context do
+    %{client: cli, server: srv} = context
+
+    transmit_dispatch = {:transmit_dispatch, %{}, "will", %{}, "arrive"}
+
+    MuxProxy.commands(cli, [{:frame_size, 2},
+                            {:send, 1, transmit_dispatch},
+                            {:send, 2, {:transmit_init, 1, %{}}}])
+
+    assert_receive {^srv, {:packet, 1}, ^transmit_dispatch}
+    assert_receive {^srv, {:packet, 2}, {:transmit_init, 1, %{}}}
+    refute_received {^srv, {:packet, _}, _}
+  end
+
+  test "transmit_init errors when dispatch fragments", %{client: cli} do
+
+    transmit_dispatch = {:transmit_dispatch, %{}, "hello", %{}, "world"}
+    {transmit_type, _} = Mux.Packet.encode(transmit_dispatch)
+    receive_dispatch = {:receive_dispatch, :ok, %{}, "hi"}
+    {receive_type, _} = Mux.Packet.encode(receive_dispatch)
+
+    # send directly on the socket as Mux.Connection won't let us forge a
+    # suitable set of packets
+    {_, %{sock: cli_sock}} = :sys.get_state(cli)
+    :gen_tcp.send(cli_sock, [<<transmit_type::signed, 1::1, 1::23>> | "bogus"])
+    :gen_tcp.send(cli_sock, [<<receive_type::signed, 1::1, 2::23>> | "bogus"])
+
+    MuxProxy.commands(cli, [{:send, 3, {:transmit_init, 1, %{}}},
+                            {:send, 0, {:transmit_discarded, 1, "its bogus"}}])
+
+    assert_receive {^cli, {:packet, 3}, {:receive_error, "can not handle reinit" <> _}}
+    assert_receive {^cli, {:packet, 1}, :receive_discarded}
+    refute_received _
+  end
+
+  test "receive_init discards fragments of dispatches", context do
+    %{client: cli, server: srv} = context
+
+    transmit_dispatch = {:transmit_dispatch, %{}, "hello", %{}, "world"}
+    {transmit_type, _} = Mux.Packet.encode(transmit_dispatch)
+    receive_dispatch = {:receive_dispatch, :ok, %{}, "hi"}
+    {receive_type, _} = Mux.Packet.encode(receive_dispatch)
+
+    # send directly on the socket as Mux.Connection won't let us forge a
+    # suitable set of packets
+    {_, %{sock: srv_sock}} = :sys.get_state(srv)
+    :gen_tcp.send(srv_sock, [<<transmit_type::signed, 1::1, 1::23>> | "bogus"])
+    :gen_tcp.send(srv_sock, [<<receive_type::signed, 1::1, 2::23>> | "bogus"])
+
+    MuxProxy.commands(srv, [{:send, 3, {:receive_init, 1, %{}}},
+                            {:send, 2, transmit_dispatch},
+                            {:send, 1, receive_dispatch}])
+
+    assert_receive {^cli, {:packet, 3}, {:receive_init, 1, %{}}}
+    assert_receive {^cli, {:packet, 2}, ^transmit_dispatch}
+    assert_receive {^cli, {:packet, 1}, ^receive_dispatch}
+    refute_received {^cli, _, _}
   end
 
   test "connection stays activate after many packets", context do
