@@ -176,9 +176,15 @@ defmodule Mux.ClientTest do
     ref1 = Mux.Client.async_dispatch(cli, %{}, "", %{}, "hello")
     assert_receive {^srv, {:packet, tag}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
 
-    assert Mux.Client.sync_dispatch(cli, %{}, "", %{}, "nacked") == {:nack, %{}}
     ref2 = Mux.Client.async_dispatch(cli, %{}, "", %{}, "nacked")
-    assert_receive {^ref2, {:nack, %{}}}
+    assert_receive {^cli, :nack, {%{}, "", %{}, "nacked"}}
+    send(cli, {self(), {:nack, %{"busy" => "sorry"}}})
+    assert_receive {^ref2, {:nack, %{"busy" => "sorry"}}}
+
+    ref3 = Mux.Client.async_dispatch(cli, %{}, "", %{}, "nacked again")
+    assert_receive {^cli, :nack, {%{}, "", %{}, "nacked again"}}
+    send(cli, {self(), {:nack, %{"busy" => "not sorry"}}})
+    assert_receive {^ref3, {:nack, %{"busy" => "not sorry"}}}
 
     MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :ok, %{}, "hi"}}])
 
@@ -191,14 +197,17 @@ defmodule Mux.ClientTest do
   test "client waits for server discarded before reusing tag", context do
     %{client: cli, server: srv} = context
 
-    ref = Mux.Client.async_dispatch(cli, %{}, "", %{}, "hello")
+    ref1 = Mux.Client.async_dispatch(cli, %{}, "", %{}, "hello")
     assert_receive {^srv, {:packet, tag}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
 
-    assert Mux.Client.cancel(cli, ref, "test cancels") == :ok
+    assert Mux.Client.cancel(cli, ref1, "test cancels") == :ok
     assert_receive {^srv, {:packet, 0},
       {:transmit_discarded, ^tag, "test cancels"}}
 
-    assert Mux.Client.sync_dispatch(cli, %{}, "", %{}, "nacked") == {:nack, %{}}
+    ref2 = Mux.Client.async_dispatch(cli, %{}, "", %{}, "nacked")
+    assert_receive {^cli, :nack, {%{}, "", %{}, "nacked"}}
+    send(cli, {self(), {:nack, %{"busy" => "sorry"}}})
+    assert_receive {^ref2, {:nack, %{"busy" => "sorry"}}}
 
     MuxProxy.commands(srv, [{:send, tag, :receive_discarded},
                             {:send, 1, :transmit_ping}])
@@ -255,18 +264,21 @@ defmodule Mux.ClientTest do
   test "client shutdowns on drain once last exchange responds", context do
     %{client: cli, server: srv} = context
     Process.flag(:trap_exit, true)
-    ref = Mux.Client.async_dispatch(cli, %{}, "", %{}, "hello")
+    ref1 = Mux.Client.async_dispatch(cli, %{}, "", %{}, "hello")
     assert_receive {^srv, {:packet, tag}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
 
     MuxProxy.commands(srv, [{:send, 1, :transmit_drain}])
     assert_receive {^srv, {:packet, 1}, :receive_drain}
 
     # client promised not to send more requests
-    assert Mux.Client.sync_dispatch(cli, %{}, "", %{}, "hi") == {:nack, %{}}
+    ref2 = Mux.Client.async_dispatch(cli, %{}, "", %{}, "nacked")
+    assert_receive {^cli, :nack, {%{}, "", %{}, "nacked"}}
+    send(cli, {self(), {:nack, %{"draining" => "sorry"}}})
+    assert_receive {^ref2, {:nack, %{"draining" => "sorry"}}}
 
     MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :ok, %{}, "ok"}}])
 
-    assert_receive {^ref, {:ok, %{}, "ok"}}
+    assert_receive {^ref1, {:ok, %{}, "ok"}}
 
     assert_receive {:EXIT, ^srv, {:tcp_error, :closed}}
     assert_received {^srv, :terminate, {:tcp_error, :closed}}
@@ -283,10 +295,14 @@ defmodule Mux.ClientTest do
   @tag headers: %{"hello" => "world"}
   test "client completes handshake", %{client: cli, server: srv} do
     assert_receive {^srv, {:packet, tag}, {:transmit_init, 1, %{"hello" => "world"}}}
-    assert Mux.Client.sync_dispatch(cli, %{}, "", %{}, "hi") == {:nack, %{}}
+
+    # client won't handle dispatches until handshake completes
+    ref1 = Mux.Client.async_dispatch(cli, %{}, "", %{}, "nacked")
+    assert_receive {^cli, :nack, {%{}, "", %{}, "nacked"}}
+    send(cli, {self(), {:nack, %{"handshake" => "sorry"}}})
+    assert_receive {^ref1, {:nack, %{"handshake" => "sorry"}}}
 
     MuxProxy.commands(srv, [{:send, tag, {:receive_init, 1, %{"hi" => "back"}}}])
-    assert Mux.Client.sync_dispatch(cli, %{}, "", %{}, "hi") == {:nack, %{}}
 
     assert_receive {^cli, :handshake, %{"hi" => "back"}}
     send(cli, {self(), {:ok, [], self()}})
@@ -301,10 +317,8 @@ defmodule Mux.ClientTest do
   test "client exits on error on handshake", %{client: cli, server: srv} do
     Process.flag(:trap_exit, true)
     assert_receive {^srv, {:packet, tag}, {:transmit_init, 1, %{"hello" => "world"}}}
-    assert Mux.Client.sync_dispatch(cli, %{}, "", %{}, "hi") == {:nack, %{}}
 
     MuxProxy.commands(srv, [{:send, tag, {:receive_error, "oops"}}])
-
     assert_receive {^cli, :terminate, %Mux.ServerError{message: "oops"}}
     assert_receive {^srv, :terminate, {:tcp_error, :closed}}
   end

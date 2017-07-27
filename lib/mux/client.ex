@@ -45,6 +45,9 @@ defmodule Mux.Client do
   @callback handshake(Mux.Packet.headers, state) ::
     {:ok, [session_option], state}
 
+  @callback nack(Mux.Packet.context, Mux.Packet.dest, Mux.Packet.dest_table,
+            body :: binary, state) :: {:nack, Mux.Packet.context}
+
   @callback terminate(reason :: any, state) :: any
 
   @spec sync_dispatch(client, Mux.Packet.context, Mux.Packet.dest,
@@ -266,11 +269,11 @@ defmodule Mux.Client do
 
   defp handle_dispatch(from, context, dest, tab, body, state) do
     %State{tags: tags, exchanges: exchanges, monitors: monitors,
-           refs: refs} = state
+           refs: refs, handler: handler} = state
     case tags_pop(tags) do
       {nil, _} ->
-        # consider adding MuxFailure flag to context of noop nack
-        {[reply_nack(from, %{})], state}
+        {:nack, context} = handler_nack(context, dest, tab, body, handler)
+        {[reply_nack(from, context)], state}
       {tag, tags} ->
         {pid, ref} = from
         mon = Process.monitor(pid)
@@ -343,6 +346,9 @@ defmodule Mux.Client do
     {:ok, opts, state} = apply(mod, :handshake, [headers, state])
     {opts, {mod, state}}
   end
+
+  defp handler_nack(context, dest, dest_table, body, {mod, state}),
+    do: apply(mod, :nack, [context, dest, dest_table, body, state])
 
   defp handler_terminate(reason, {mod, state}),
     do: apply(mod, :terminate, [reason, state])

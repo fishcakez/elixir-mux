@@ -60,6 +60,14 @@ defmodule MuxClientProxy do
     end
   end
 
+  def nack(context, dest, dest_tab, body, parent) do
+    send(parent, {self(), :nack, {context, dest, dest_tab, body}})
+    receive do
+      {^parent, result} ->
+        result
+    end
+  end
+
   def terminate(reason, parent) do
     send(parent, {self(), :terminate, reason})
   end

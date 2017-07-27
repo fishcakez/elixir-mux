@@ -49,7 +49,10 @@ defmodule Mux.IntegrationTest do
     # draining must have commenced once this is received
     assert_receive {^ref1, {:ok, %{}, "one"}}
     # client nacks all new requests
-    assert Mux.Client.sync_dispatch(cli, %{}, "", %{}, "drain") == {:nack, %{}}
+    ref3 = Mux.Client.async_dispatch(cli, %{}, "", %{}, "drain")
+    assert_receive {^cli, :nack, {%{}, "", %{}, "drain"}}
+    send(cli, {self(), {:nack, %{"draining" => "sorry"}}})
+    assert_receive {^ref3, {:nack, %{"draining" => "sorry"}}}
 
     send(task2, {self(), {:ok, %{}, "two"}})
     assert_receive {^ref2, {:ok, %{}, "two"}}
