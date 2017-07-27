@@ -2,11 +2,10 @@ defmodule Mux.ClientTest do
   use ExUnit.Case, async: true
 
   setup context do
-    session_size = context[:session_size] || 32
-    ping_interval = context[:ping_interval] || :infinity
     debug = context[:debug] || [:log]
-    opts = [debug: debug, session_size: session_size,
-            ping_interval: ping_interval]
+    session_opts = context[:session_opts] || []
+    opts = [debug: debug, session_opts: session_opts,
+            headers: context[:headers]]
     {cli, srv} = pair(opts)
     {:ok, [client: cli, server: srv]}
   end
@@ -170,7 +169,7 @@ defmodule Mux.ClientTest do
       {:transmit_discarded, ^tag, "test cancels again"}}
   end
 
-  @tag session_size: 1
+  @tag session_opts: [session_size: 1]
   test "client nacks when at max sessions", context do
     %{client: cli, server: srv} = context
 
@@ -188,7 +187,7 @@ defmodule Mux.ClientTest do
     Mux.Client.async_dispatch(cli, %{}, "", %{}, "hello")
   end
 
-  @tag session_size: 1
+  @tag session_opts: [session_size: 1]
   test "client waits for server discarded before reusing tag", context do
     %{client: cli, server: srv} = context
 
@@ -212,7 +211,7 @@ defmodule Mux.ClientTest do
     assert_receive {^srv, {:packet, ^tag}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
   end
 
-  @tag ping_interval: 50
+  @tag session_opts: [ping_interval: 50]
   @tag :capture_log
   test "client pings multiple times", %{server: srv} do
     assert_receive {^srv, {:packet, tag}, :transmit_ping}
@@ -221,7 +220,7 @@ defmodule Mux.ClientTest do
     MuxProxy.commands(srv, [{:send, tag, :receive_ping}])
   end
 
-  @tag ping_interval: 10
+  @tag session_opts: [ping_interval: 10]
   @tag :capture_log
   @tag debug: []
   test "client closes connection if no ping response", context do
@@ -233,6 +232,7 @@ defmodule Mux.ClientTest do
     assert_receive {:EXIT, ^srv, {:tcp_error, :closed}}
     assert_received {^srv, :terminate, {:tcp_error, :closed}}
     assert_receive {:EXIT, ^cli, {:tcp_error, :timeout}}
+    assert_received {^cli, :terminate, {:tcp_error, :timeout}}
   end
 
   @tag :capture_log
@@ -280,6 +280,35 @@ defmodule Mux.ClientTest do
       {:receive_error, "can not handle init"}}
   end
 
+  @tag headers: %{"hello" => "world"}
+  test "client completes handshake", %{client: cli, server: srv} do
+    assert_receive {^srv, {:packet, tag}, {:transmit_init, 1, %{"hello" => "world"}}}
+    assert Mux.Client.sync_dispatch(cli, %{}, "", %{}, "hi") == {:nack, %{}}
+
+    MuxProxy.commands(srv, [{:send, tag, {:receive_init, 1, %{"hi" => "back"}}}])
+    assert Mux.Client.sync_dispatch(cli, %{}, "", %{}, "hi") == {:nack, %{}}
+
+    assert_receive {^cli, :handshake, %{"hi" => "back"}}
+    send(cli, {self(), {:ok, [], self()}})
+
+    _ = Mux.Client.async_dispatch(cli, %{}, "", %{}, "hello")
+    assert_receive {^srv, {:packet, _}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
+  end
+
+  @tag headers: %{"hello" => "world"}
+  @tag :capture_log
+  @tag debug: []
+  test "client exits on error on handshake", %{client: cli, server: srv} do
+    Process.flag(:trap_exit, true)
+    assert_receive {^srv, {:packet, tag}, {:transmit_init, 1, %{"hello" => "world"}}}
+    assert Mux.Client.sync_dispatch(cli, %{}, "", %{}, "hi") == {:nack, %{}}
+
+    MuxProxy.commands(srv, [{:send, tag, {:receive_error, "oops"}}])
+
+    assert_receive {^cli, :terminate, %Mux.ServerError{message: "oops"}}
+    assert_receive {^srv, :terminate, {:tcp_error, :closed}}
+  end
+
   test "client sends back error on transmit dispatch/request", %{server: srv} do
     MuxProxy.commands(srv, [{:send, 1, {:transmit_request, %{}, ""}},
                             {:send, 2, {:transmit_dispatch, %{}, "", %{}, ""}}])
@@ -314,23 +343,19 @@ defmodule Mux.ClientTest do
     srv_sock = Task.await(srv_task)
     :gen_tcp.close(l)
 
-    cli = client_spawn_link(cli_sock, opts)
+    headers = Keyword.get(opts, :headers)
+
+    cli = MuxClientProxy.spawn_link(cli_sock, headers || %{}, opts)
     srv = MuxProxy.spawn_link(srv_sock, opts)
 
-    {cli, srv}
-  end
+    unless headers do
+      assert_receive {^srv, {:packet, tag}, {:transmit_init, 1, %{}}}
+      MuxProxy.commands(srv, [{:send, tag, {:receive_init, 1, %{}}}])
 
-  defp client_spawn_link(sock, opts) do
-    pid = :proc_lib.spawn_link(__MODULE__, :client_init_it, [self(), opts])
-    :ok = :gen_tcp.controlling_process(sock, pid)
-    send(pid, {self(), sock})
-    pid
-  end
-
-  def client_init_it(parent, opts) do
-    receive do
-      {^parent, sock} ->
-        Mux.Client.enter_loop(sock, opts)
+      assert_receive {^cli, :handshake, %{}}
+      send(cli, {self(), {:ok, Keyword.get(opts, :session_opts, []), self()}})
     end
+
+    {cli, srv}
   end
 end

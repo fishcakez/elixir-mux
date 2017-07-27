@@ -11,20 +11,27 @@ defmodule Mux.Server do
   defmodule State do
     @moduledoc false
     @enforce_keys [:exchanges, :tasks, :session_size, :handler, :ref, :drain,
-                   :ping]
-    defstruct [:exchanges, :tasks, :session_size, :handler, :ref, :drain, :ping]
+                   :timer]
+    defstruct [:exchanges, :tasks, :session_size, :handler, :ref, :drain,
+               :timer]
   end
 
+  @handshake_timeout 5_000
+  @handshake_check "tinit check"
+  @mux_version 1
   @session_size 32
+  @frame_size 0xFFFF
   @ping_interval 5_000
   @ping_tag 1
   @drain_tag 2
 
   @type state :: any
   @type server :: Mux.Connection.connection
-  @type option ::
-    Mux.Connection.option |
+  @type option :: Mux.Connection.option | {:handshake_timeout, timeout}
+
+  @type session_option ::
     {:session_size, pos_integer} |
+    {:frame_size, pos_integer} |
     {:ping_interval, timeout}
 
   @type result ::
@@ -33,8 +40,17 @@ defmodule Mux.Server do
     {:nack, Mux.Packet.context} |
     {:error, %Mux.ServerError{}}
 
+  @callback init(state) ::
+    {:ok, state}
+
+  @callback handshake(Mux.Packet.headers, state) ::
+    {:ok, Mux.Packet.headers, [session_option], state} |
+    {:error, %Mux.ServerError{}, state}
+
   @callback handle(Mux.Packet.context, Mux.Packet.dest, Mux.Packet.dest_table,
             body :: binary, state) :: result
+
+  @callback terminate(reason :: any, state) :: any
 
   @spec drain(server) :: :ok
   def drain(server),
@@ -42,20 +58,20 @@ defmodule Mux.Server do
 
   @spec enter_loop(module, :gen_tcp.socket, state, [option]) :: no_return
   def enter_loop(mod, sock, state, opts) do
-    {cli_opts, conn_opts} = Keyword.split(opts, [:session_size, :ping_interval])
-    arg = {{mod, state}, cli_opts}
+    {srv_opts, conn_opts} = Keyword.split(opts, [:handshake_timeout])
+    arg = {{mod, state}, srv_opts}
     Mux.Connection.enter_loop(__MODULE__, sock, arg, conn_opts)
   end
 
   @doc false
   def init({handler, opts}) do
     Process.flag(:trap_exit, true)
-    session_size = Keyword.get(opts, :session_size, @session_size)
-    ping_interval = Keyword.get(opts, :ping_interval, @ping_interval)
-    state = %State{exchanges: %{}, tasks: %{}, session_size: session_size,
-                   handler: handler, ref: make_ref(), drain: false,
-                   ping: start_interval(ping_interval)}
-
+    timeout = Keyword.get(opts, :handshake_timeout, @handshake_timeout)
+    handler = handler_init(handler)
+    # session_size is 0 until handshake succeeds
+    state = %State{exchanges: %{}, tasks: %{}, session_size: 0, ref: make_ref(),
+                   handler: handler, drain: false,
+                   timer: {:handshake, start_timer(timeout)}}
     {[], state}
   end
 
@@ -66,11 +82,11 @@ defmodule Mux.Server do
   def handle(:info, {:EXIT, pid, reason}, state) do
     handle_exit(pid, reason, state)
   end
-  def handle(:info, {:timeout, ping, interval}, %State{ping: ping} = state) do
+  def handle(:info, {:timeout, tref, interval}, %State{timer: tref} = state) do
     handle_ping(interval, state)
   end
-  def handle(:info, {:timeout, ping, _}, %State{ping: {_tag, ping}}) do
-    # no response from last ping
+  def handle(:info, {:timeout, tref, _}, %State{timer: {_tag, tref}}) do
+    # no response from last ping or handshake
     exit({:tcp_error, :timeout})
   end
   def handle(:info, msg, state) do
@@ -82,7 +98,7 @@ defmodule Mux.Server do
     do: handle_drain(state)
 
   @doc false
-  def terminate(_, %State{tasks: tasks}) do
+  def terminate(reason, %State{tasks: tasks, handler: handler}) do
     pids = Map.keys(tasks)
     for pid <- pids do
       Process.exit(pid, :kill)
@@ -93,6 +109,7 @@ defmodule Mux.Server do
           :ok
       end
     end
+  handler_terminate(reason, handler)
   end
 
   # 0 tag is a one way, only handle one-way transmit_discard
@@ -101,8 +118,12 @@ defmodule Mux.Server do
   defp handle_packet(0, _cast, state),
     do: {[], state}
   # ping came back before next ping was due to be sent
-  defp handle_packet(tag, :receive_ping, %State{ping: {tag, ping}} = state),
-    do: {[], %State{state | ping: ping}}
+  defp handle_packet(tag, :receive_ping, %State{timer: {tag, tref}} = state),
+    do: {[], %State{state | timer: tref}}
+  # client checking that support handshake
+  defp handle_packet(tag, {:receive_error, @handshake_check},
+       %State{timer: {:handshake, _}} = state),
+    do: {[receive_error(tag, @handshake_check)], state}
   # check to see if sent drain request, wait for client to close
   defp handle_packet(tag, :receive_drain, %State{drain: tag} = state),
     do: {[], %State{state | drain: true}}
@@ -119,9 +140,11 @@ defmodule Mux.Server do
         {[receive_drain(tag)], state}
       :transmit_ping ->
         {[receive_ping(tag)], state}
-      {:transmit_init, _, _} ->
-        # should handle init
-        {[receive_error(tag, "can not handle init")], state}
+      {:transmit_init, vsn, headers} when vsn >= @mux_version ->
+        # only support this version
+        handle_init(tag, headers, state)
+      {:transmit_init, vsn, _} when vsn < @mux_version ->
+        {[receive_error(tag, "mux version #{vsn} not supported")], state}
     end
   end
 
@@ -236,8 +259,50 @@ defmodule Mux.Server do
     end
   end
 
+  defp handle_init(tag, headers, %State{timer: {:handshake, tref}} = state) do
+    handshake(tag, headers, tref, state)
+  end
+  # only handle init when expecting handshake
+  defp handle_init(tag, _, state),
+    do: {[receive_error(tag, "reinitialization not supported")], state}
+
+  defp handshake(tag, headers, tref, %State{handler: handler} = state) do
+    case handler_handshake(headers, handler) do
+      {:ok, headers, opts, handler} ->
+        cancel_timer(tref)
+        session_size = Keyword.get(opts, :session_size, @session_size)
+        ping_interval = Keyword.get(opts, :ping_interval, @ping_interval)
+        frame_size = Keyword.get(opts, :frame_size, @frame_size)
+
+        commands = [receive_init(tag, @mux_version, headers),
+                    {:frame_size, frame_size}]
+        state = %State{state | handler: handler, session_size: session_size,
+                               timer: start_interval(ping_interval)}
+        {commands, state}
+      {:error, %Mux.ServerError{message: why}, handler} ->
+        {[receive_error(tag, why)], %State{state | handler: handler}}
+    end
+  end
+
+  defp handler_init({mod, state}) do
+    {:ok, state} = apply(mod, :init, [state])
+    {mod, state}
+  end
+
+  defp handler_handshake(headers, {mod, state}) do
+    case apply(mod, :handshake, [headers, state]) do
+      {:ok, headers, opts, state} ->
+        {:ok, headers, opts, {mod, state}}
+      {:error, %Mux.ServerError{} = err, state} ->
+        {:error, err, {mod, state}}
+    end
+  end
+
+  defp handler_terminate(reason, {mod, state}),
+    do: apply(mod, :terminate, [reason, state])
+
   defp handle_ping(ping_interval, state) do
-    state = %State{state | ping: {@ping_tag, start_interval(ping_interval)}}
+    state = %State{state | timer: {@ping_tag, start_interval(ping_interval)}}
     {[transmit_ping(@ping_tag)], state}
   end
 
@@ -271,11 +336,19 @@ defmodule Mux.Server do
   defp receive_discarded(tag),
     do: {:send, tag, :receive_discarded}
 
+  defp receive_init(tag, vsn, headers),
+    do: {:send, tag, {:receive_init, vsn, headers}}
+
   defp receive_drain(tag),
     do: {:send, tag, :receive_drain}
 
   defp receive_ping(tag),
     do: {:send, tag, :receive_ping}
+
+  defp start_timer(:infinity),
+    do: make_ref()
+  defp start_timer(timeout),
+    do: :erlang.start_timer(timeout, self(), timeout)
 
   defp start_interval(:infinity),
     do: make_ref()
@@ -283,5 +356,19 @@ defmodule Mux.Server do
     # randomise uniform around [0.5 interval, 1.5 interval]
     delay = div(interval, 2) + :rand.uniform(interval + 1) - 1
     :erlang.start_timer(delay, self(), interval)
+  end
+
+  defp cancel_timer(tref) do
+    if :erlang.cancel_timer(tref) do
+      :ok
+    else
+      receive do
+        {:timeout, ^tref, _} ->
+          :ok
+      after
+        0 ->
+          :ok
+      end
+    end
   end
 end

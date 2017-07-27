@@ -3,7 +3,10 @@ defmodule Mux.IntegrationTest do
 
   setup context do
     debug = context[:debug] || [:log]
-    {cli, srv} = pair([debug: debug])
+    session_opts = context[:session_opts] || []
+    opts = [debug: debug, session_opts: session_opts,
+            headers: context[:headers]]
+    {cli, srv} = pair(opts)
     {:ok, [client: cli, server: srv]}
   end
 
@@ -78,24 +81,19 @@ defmodule Mux.IntegrationTest do
     srv_sock = Task.await(srv_task)
     :gen_tcp.close(l)
 
-    cli = client_spawn_link(cli_sock, opts)
+    headers = Keyword.get(opts, :headers)
+
+    cli = MuxClientProxy.spawn_link(cli_sock, headers || %{}, opts)
     srv = MuxServerProxy.spawn_link(srv_sock, opts)
+
+    unless headers do
+      assert_receive {^srv, :handshake, %{}}
+      session_opts = opts[:session_opts] || []
+      send(srv, {self(), {:ok, %{}, session_opts, self()}})
+      assert_receive {^cli, :handshake, %{}}
+      send(cli, {self(), {:ok, session_opts, self()}})
+    end
 
     {cli, srv}
   end
-
-  defp client_spawn_link(sock, opts) do
-    pid = :proc_lib.spawn_link(__MODULE__, :client_init_it, [self(), opts])
-    :ok = :gen_tcp.controlling_process(sock, pid)
-    send(pid, {self(), sock})
-    pid
-  end
-
-  def client_init_it(parent, opts) do
-    receive do
-      {^parent, sock} ->
-        Mux.Client.enter_loop(sock, opts)
-    end
-  end
-
 end

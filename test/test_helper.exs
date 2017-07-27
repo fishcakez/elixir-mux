@@ -32,6 +32,38 @@ defmodule MuxProxy do
     do: send(parent, {self(), :terminate, reason})
 end
 
+defmodule MuxClientProxy do
+  @behaviour Mux.Client
+
+  def spawn_link(socket, headers, opts) do
+    pid = :proc_lib.spawn_link(__MODULE__, :init_it, [self(), headers, opts])
+    :ok = :gen_tcp.controlling_process(socket, pid)
+    send(pid, {self(), socket})
+    pid
+  end
+
+  def init_it(parent, headers, opts) do
+    receive do
+      {^parent, socket} ->
+        Mux.Client.enter_loop(__MODULE__, socket, {headers, parent}, opts)
+    end
+  end
+
+  def init({headers, parent}),
+    do: {:ok, headers, parent}
+
+  def handshake(headers, parent) do
+    send(parent, {self(), :handshake, headers})
+    receive do
+      {^parent, result} ->
+        result
+    end
+  end
+
+  def terminate(reason, parent) do
+    send(parent, {self(), :terminate, reason})
+  end
+end
 defmodule MuxServerProxy do
   @behaviour Mux.Server
 
@@ -49,12 +81,27 @@ defmodule MuxServerProxy do
     end
   end
 
+  def init(parent),
+    do: {:ok, parent}
+
+  def handshake(headers, parent) do
+    send(parent, {self(), :handshake, headers})
+    receive do
+      {^parent, result} ->
+        result
+    end
+  end
+
   def handle(context, dest, dest_tab, body, parent) do
     send(parent, {self(), :handle, {context, dest, dest_tab, body}})
     receive do
       {^parent, result} ->
         result
     end
+  end
+
+  def terminate(reason, parent) do
+    send(parent, {self(), :terminate, reason})
   end
 end
 

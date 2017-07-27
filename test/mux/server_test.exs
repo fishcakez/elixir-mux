@@ -2,11 +2,10 @@ defmodule Mux.ServerTest do
   use ExUnit.Case, async: true
 
   setup context do
-    session_size = context[:session_size] || 32
-    ping_interval = context[:ping_interval] || :infinity
     debug = context[:debug] || [:log]
-    opts = [debug: debug, session_size: session_size,
-            ping_interval: ping_interval]
+    session_opts = context[:session_opts] || []
+    opts = [debug: debug, session_opts: session_opts,
+            handshake: context[:handshake]]
     {cli, srv} = pair(opts)
     {:ok, [client: cli, server: srv]}
   end
@@ -180,10 +179,10 @@ defmodule Mux.ServerTest do
 
   test "server reponds with error on init", %{client: cli} do
     MuxProxy.commands(cli, [{:send, 1, {:transmit_init, 1, %{}}}])
-    assert_receive {^cli, {:packet, 1}, {:receive_error, "can not handle init"}}
+    assert_receive {^cli, {:packet, 1}, {:receive_error, "reinitialization not supported"}}
   end
 
-  @tag session_size: 1
+  @tag session_opts: [session_size: 1]
   test "server nacks on max active tasks and allows once below", context do
     %{client: cli} = context
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "1"}},
@@ -206,7 +205,7 @@ defmodule Mux.ServerTest do
       {:receive_dispatch, :ok, %{}, "hello"}}
   end
 
-  @tag ping_interval: 50
+  @tag session_opts: [ping_interval: 50]
   @tag :capture_log
   test "server pings multiple times", %{client: cli} do
     assert_receive {^cli, {:packet, tag}, :transmit_ping}
@@ -215,7 +214,7 @@ defmodule Mux.ServerTest do
     MuxProxy.commands(cli, [{:send, tag, :receive_ping}])
   end
 
-  @tag ping_interval: 10
+  @tag session_opts: [ping_interval: 10]
   @tag :capture_log
   @tag debug: []
   test "server closes connection if no ping response", context do
@@ -227,7 +226,50 @@ defmodule Mux.ServerTest do
     assert_receive {:EXIT, ^cli, {:tcp_error, :closed}}
     assert_received {^cli, :terminate, {:tcp_error, :closed}}
     assert_receive {:EXIT, ^srv, {:tcp_error, :timeout}}
+    assert_received {^srv, :terminate, {:tcp_error, :timeout}}
   end
+
+  @tag :handshake
+  test "server handles tinit check", context do
+    %{client: cli, server: srv} = context
+
+    init_check = "tinit check"
+    MuxProxy.commands(cli, [{:send, 1, {:receive_error, init_check}}])
+    assert_receive {^cli, {:packet, _}, {:receive_error, ^init_check}}
+
+    MuxProxy.commands(cli, [{:send, 1, {:transmit_init, 1, %{"hello" => "world"}}}])
+
+    assert_receive {^srv, :handshake, %{"hello" => "world"}}
+    send(srv, {self(), {:ok, %{"hi" => "back"}, [], self()}})
+
+    assert_receive {^cli, {:packet, 1}, {:receive_init, 1, %{"hi" => "back"}}}
+  end
+
+  @tag :handshake
+  test "server sends receive error on server error in handshake", context do
+    %{client: cli, server: srv} = context
+
+    MuxProxy.commands(cli, [{:send, 1, {:transmit_init, 1, %{"hello" => "world"}}}])
+
+    assert_receive {^srv, :handshake, %{"hello" => "world"}}
+    send(srv, {self(), {:error, %Mux.ServerError{message: "nope"}, self()}})
+
+    assert_receive {^cli, {:packet, 1}, {:receive_error, "nope"}}
+
+    MuxProxy.commands(cli, [{:send, 1, {:transmit_init, 1, %{"hello" => "again"}}}])
+
+    assert_receive {^srv, :handshake, %{"hello" => "again"}}
+    send(srv, {self(), {:ok, %{"hi" => "back"}, [], self()}})
+
+    assert_receive {^cli, {:packet, 1}, {:receive_init, 1, %{"hi" => "back"}}}
+  end
+
+  @tag :handshake
+  test "server nacks before handshake", %{client: cli} do
+    MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "hello", %{}, "world"}}])
+    assert_receive {^cli, {:packet, 1}, {:receive_dispatch, :nack, %{}, ""}}
+  end
+
   ## Helpers
 
   defp pair(opts) do
@@ -251,8 +293,19 @@ defmodule Mux.ServerTest do
     srv_sock = Task.await(srv_task)
     :gen_tcp.close(l)
 
+    handshake = Keyword.get(opts, :handshake)
+
     cli = MuxProxy.spawn_link(cli_sock, opts)
     srv = MuxServerProxy.spawn_link(srv_sock, opts)
+
+    unless handshake do
+      MuxProxy.commands(cli, [{:send, 1, {:transmit_init, 1, %{}}}])
+
+      assert_receive {^srv, :handshake, %{}}
+      send(srv, {self(), {:ok, %{}, Keyword.get(opts, :session_opts, []), self()}})
+
+      assert_receive {^cli, {:packet, 1}, {:receive_init, 1, %{}}}
+    end
 
     {cli, srv}
   end
