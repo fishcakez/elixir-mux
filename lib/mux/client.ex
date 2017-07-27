@@ -63,9 +63,9 @@ defmodule Mux.Client do
     Mux.Connection.call(client, {:dispatch, context, dest, tab, body}, timeout)
   end
 
-  @spec async_dispatch(client, Mux.Packet.context, Mux.Packet.dest,
+  @spec dispatch(client, Mux.Packet.context, Mux.Packet.dest,
         Mux.Packet.dest_table, body :: binary) :: reference
-  def async_dispatch(client, context, dest, tab, body) do
+  def dispatch(client, context, dest, tab, body) do
     ref = make_ref()
     from = {self(), ref}
     Mux.Connection.cast(client, {:dispatch, from, context, dest, tab, body})
