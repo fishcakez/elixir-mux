@@ -68,6 +68,14 @@ defmodule MuxClientProxy do
     end
   end
 
+  def drain(parent) do
+    send(parent, {self(), :drain, nil})
+    receive do
+      {^parent, result} ->
+        result
+    end
+  end
+
   def terminate(reason, parent) do
     send(parent, {self(), :terminate, reason})
   end

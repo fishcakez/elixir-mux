@@ -43,6 +43,8 @@ defmodule Mux.IntegrationTest do
     assert_receive {task2, :handle, {%{}, "dest", %{}, "2"}}
 
     Mux.Server.drain(srv)
+    assert_receive {^cli, :drain, nil}
+    send(cli, {self(), {:ok, self()}})
 
     # send first after drain to ensure receive_drain arrives before response
     send(task1, {self(), {:ok, %{}, "one"}})

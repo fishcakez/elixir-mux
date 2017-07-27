@@ -251,12 +251,14 @@ defmodule Mux.ClientTest do
     Process.flag(:trap_exit, true)
 
     MuxProxy.commands(srv, [{:send, 1, :transmit_drain}])
-
+    assert_receive {^cli, :drain, nil}
+    send(cli, {self(), {:ok, self()}})
     assert_receive {^srv, {:packet, 1}, :receive_drain}
 
     assert_receive {:EXIT, ^srv, {:tcp_error, :closed}}
     assert_received {^srv, :terminate, {:tcp_error, :closed}}
     assert_receive {:EXIT, ^cli, {:tcp_error, :closed}}
+    assert_received {^cli, :terminate, {:tcp_error, :closed}}
   end
 
   @tag :capture_log
@@ -268,6 +270,8 @@ defmodule Mux.ClientTest do
     assert_receive {^srv, {:packet, tag}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
 
     MuxProxy.commands(srv, [{:send, 1, :transmit_drain}])
+    assert_receive {^cli, :drain, nil}
+    send(cli, {self(), {:ok, self()}})
     assert_receive {^srv, {:packet, 1}, :receive_drain}
 
     # client promised not to send more requests

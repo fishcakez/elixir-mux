@@ -48,6 +48,8 @@ defmodule Mux.Client do
   @callback nack(Mux.Packet.context, Mux.Packet.dest, Mux.Packet.dest_table,
             body :: binary, state) :: {:nack, Mux.Packet.context}
 
+  @callback drain(state) :: {:ok, state}
+
   @callback terminate(reason :: any, state) :: any
 
   @spec sync_dispatch(client, Mux.Packet.context, Mux.Packet.dest,
@@ -350,6 +352,11 @@ defmodule Mux.Client do
   defp handler_nack(context, dest, dest_table, body, {mod, state}),
     do: apply(mod, :nack, [context, dest, dest_table, body, state])
 
+  def handler_drain({mod, state}) do
+    {:ok, state} = apply(mod, :drain, [state])
+    {mod, state}
+  end
+
   defp handler_terminate(reason, {mod, state}),
     do: apply(mod, :terminate, [reason, state])
 
@@ -359,13 +366,15 @@ defmodule Mux.Client do
   end
 
   # set fake tags so no new tags can be assigned and so no new dispatches
-  defp handle_drain(tag, %State{exchanges: exchanges} = state) do
+  defp handle_drain(tag, state) do
+    %State{handler: handler, exchanges: exchanges} = state
+    handler = handler_drain(handler)
     if map_size(exchanges) == 0 do
         # delay shutting down write so that receive_drain is sent to server
         # before shutting down socket
         send(self(), :shutdown_write)
     end
-    {[receive_drain(tag)], %State{state | tags: :drain}}
+    {[receive_drain(tag)], %State{state | tags: :drain, handler: handler}}
   end
 
   defp transmit_dispatch(tag, context, dest, tab, body),
