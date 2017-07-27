@@ -68,6 +68,14 @@ defmodule MuxClientProxy do
     end
   end
 
+  def lease(time_unit, timeout, parent) do
+    send(parent, {self(), :lease, {time_unit, timeout}})
+    receive do
+      {^parent, result} ->
+        result
+    end
+  end
+
   def drain(parent) do
     send(parent, {self(), :drain, nil})
     receive do

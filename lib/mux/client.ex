@@ -48,6 +48,10 @@ defmodule Mux.Client do
   @callback nack(Mux.Packet.context, Mux.Packet.dest, Mux.Packet.dest_table,
             body :: binary, state) :: {:nack, Mux.Packet.context}
 
+
+  @callback lease(System.time_unit, len :: non_neg_integer, state) ::
+    {:ok, state}
+
   @callback drain(state) :: {:ok, state}
 
   @callback terminate(reason :: any, state) :: any
@@ -142,8 +146,9 @@ defmodule Mux.Client do
   def terminate(reason, %State{handler: handler}),
     do: handler_terminate(reason, handler)
 
-  # 0 tag is a one way, this could be a lease but don't handle that yet, the
-  # server will likely nack at some point if it requires a lease
+  # 0 tag is a one way
+  defp handle_packet(0, {:transmit_lease, unit, timeout}, state),
+    do: handle_lease(unit, timeout, state)
   defp handle_packet(0, _cast, state),
     do: {[], state}
   # ping came back before next ping was due to be sent
@@ -352,7 +357,12 @@ defmodule Mux.Client do
   defp handler_nack(context, dest, dest_table, body, {mod, state}),
     do: apply(mod, :nack, [context, dest, dest_table, body, state])
 
-  def handler_drain({mod, state}) do
+  defp handler_lease(unit, timeout, {mod, state}) do
+    {:ok, state} = apply(mod, :lease, [unit, timeout, state])
+    {mod, state}
+  end
+
+  defp handler_drain({mod, state}) do
     {:ok, state} = apply(mod, :drain, [state])
     {mod, state}
   end
@@ -364,6 +374,9 @@ defmodule Mux.Client do
     state = %State{state | timer: {@ping_tag, start_interval(ping_interval)}}
     {[transmit_ping(@ping_tag)], state}
   end
+
+  defp handle_lease(unit, timeout, %State{handler: handler} = state),
+    do: {[], %State{state | handler: handler_lease(unit, timeout, handler)}}
 
   # set fake tags so no new tags can be assigned and so no new dispatches
   defp handle_drain(tag, state) do

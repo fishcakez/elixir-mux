@@ -244,6 +244,11 @@ defmodule Mux.ClientTest do
     assert_received {^cli, :terminate, {:tcp_error, :timeout}}
   end
 
+  test "client updates handler on server lease", %{server: srv, client: cli} do
+    MuxProxy.commands(srv, [{:send, 0, {:transmit_lease, :second, 1}}])
+    assert_receive {^cli, :lease, {:millisecond, 1000}}
+  end
+
   @tag :capture_log
   @tag debug: []
   test "client shutdowns on drain if no exchanges", context do
