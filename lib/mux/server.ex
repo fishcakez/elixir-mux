@@ -50,6 +50,9 @@ defmodule Mux.Server do
   @callback handle(Mux.Packet.context, Mux.Packet.dest, Mux.Packet.dest_table,
             body :: binary, state) :: result
 
+  @callback nack(Mux.Packet.context, Mux.Packet.dest, Mux.Packet.dest_table,
+            body :: binary, state) :: {:nack, Mux.Packet.context}
+
   @callback terminate(reason :: any, state) :: any
 
   @spec drain(server) :: :ok
@@ -181,8 +184,8 @@ defmodule Mux.Server do
       tasks = Map.put(tasks, pid, tag)
       {[], %State{state | exchanges: exchanges, tasks: tasks}}
     else
-      # consider adding MuxFailure flag to context of noop nack
-      {[receive_dispatch_nack(tag, %{})], state}
+      {:nack, context} = handler_nack(context, dest, dest_table, body, handler)
+      {[receive_dispatch_nack(tag, context)], state}
     end
   end
 
@@ -297,6 +300,9 @@ defmodule Mux.Server do
         {:error, err, {mod, state}}
     end
   end
+
+  defp handler_nack(context, dest, dest_table, body, {mod, state}),
+    do: apply(mod, :nack, [context, dest, dest_table, body, state])
 
   defp handler_terminate(reason, {mod, state}),
     do: apply(mod, :terminate, [reason, state])

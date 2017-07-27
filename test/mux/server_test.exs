@@ -184,14 +184,16 @@ defmodule Mux.ServerTest do
 
   @tag session_opts: [session_size: 1]
   test "server nacks on max active tasks and allows once below", context do
-    %{client: cli} = context
+    %{client: cli, server: srv} = context
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "1"}},
                             {:send, 2, {:transmit_dispatch, %{}, "", %{}, "2"}}])
 
     assert_receive {task1, :handle, {%{}, "", %{}, "1"}}
+
+    assert_receive {^srv, :nack, {%{}, "", %{}, "2"}}
+    send(srv, {self(), {:nack, %{"busy" => "sorry"}}})
     assert_receive {^cli, {:packet, 2},
-      {:receive_dispatch, :nack, %{}, ""}}
-    refute_received {_, :handle, _}
+      {:receive_dispatch, :nack, %{"busy" => "sorry"}, ""}}
 
     send(task1, {self(), {:ok, %{}, "hi"}})
     assert_receive {^cli, {:packet, 1},
@@ -265,9 +267,12 @@ defmodule Mux.ServerTest do
   end
 
   @tag :handshake
-  test "server nacks before handshake", %{client: cli} do
+  test "server nacks before handshake", %{client: cli, server: srv} do
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "hello", %{}, "world"}}])
-    assert_receive {^cli, {:packet, 1}, {:receive_dispatch, :nack, %{}, ""}}
+    assert_receive {^srv, :nack, {%{}, "hello", %{}, "world"}}
+    send(srv, {self(), {:nack, %{"busy" => "sorry"}}})
+    assert_receive {^cli, {:packet, 1},
+      {:receive_dispatch, :nack, %{"busy" => "sorry"}, ""}}
   end
 
   ## Helpers
