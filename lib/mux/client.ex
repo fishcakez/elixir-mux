@@ -49,8 +49,7 @@ defmodule Mux.Client do
             body :: binary, state) :: {:nack, Mux.Packet.context}
 
 
-  @callback lease(System.time_unit, len :: non_neg_integer, state) ::
-    {:ok, state}
+  @callback lease(System.time_unit, timeout, state) :: {:ok, state}
 
   @callback drain(state) :: {:ok, state}
 
