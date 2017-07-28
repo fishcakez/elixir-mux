@@ -11,9 +11,9 @@ defmodule Mux.ServerSession do
   defmodule State do
     @moduledoc false
     @enforce_keys [:exchanges, :tasks, :session_size, :handler, :ref, :drain,
-                   :timer]
+                   :lease, :timer]
     defstruct [:exchanges, :tasks, :session_size, :handler, :ref, :drain,
-               :timer]
+               :lease, :timer]
   end
 
   @handshake_timeout 5_000
@@ -23,6 +23,7 @@ defmodule Mux.ServerSession do
   @frame_size 0xFFFF
   @ping_interval 5_000
   @ping_tag 1
+  @lease_tag 0
   @drain_tag 2
 
   @type state :: any
@@ -55,6 +56,10 @@ defmodule Mux.ServerSession do
 
   @callback terminate(reason :: any, state) :: any
 
+  @spec lease(server, System.time_unit, non_neg_integer) :: :ok
+  def lease(server, time_unit, non_neg_integer),
+    do: Mux.Connection.cast(server, {:lease, time_unit, non_neg_integer})
+
   @spec drain(server) :: :ok
   def drain(server),
     do: Mux.Connection.cast(server, :drain)
@@ -71,9 +76,10 @@ defmodule Mux.ServerSession do
     Process.flag(:trap_exit, true)
     timeout = Keyword.get(opts, :handshake_timeout, @handshake_timeout)
     handler = handler_init(handler)
-    # session_size is 0 until handshake succeeds
+    # session_size is 0 until handshake succeeds, lease is assumed to be held
+    # for infinity until told otherwise
     state = %State{exchanges: %{}, tasks: %{}, session_size: 0, ref: make_ref(),
-                   handler: handler, drain: false,
+                   handler: handler, drain: false, lease: make_ref(),
                    timer: {:handshake, start_timer(timeout)}}
     {[], state}
   end
@@ -92,11 +98,16 @@ defmodule Mux.ServerSession do
     # no response from last ping or handshake
     exit({:tcp_error, :timeout})
   end
+  def handle(:info, {:timeout, lease, _}, %State{lease: lease} = state) do
+    {[], %State{state | lease: false}}
+  end
   def handle(:info, msg, state) do
     :error_logger.error_msg("#{__MODULE__} received unexpected message: ~p~n",
                             [msg])
     {[], state}
   end
+  def handle(:cast, {:lease, time_unit, timeout}, state),
+    do: handle_lease(time_unit, timeout, state)
   def handle(:cast, :drain, state),
     do: handle_drain(state)
 
@@ -182,8 +193,8 @@ defmodule Mux.ServerSession do
 
   defp handle_dispatch(tag, context, dest, dest_table, body, state) do
     %State{exchanges: exchanges, tasks: tasks, session_size: session_size,
-           handler: handler, ref: ref} = state
-    if map_size(tasks) < session_size do
+           lease: lease, handler: handler, ref: ref} = state
+    if map_size(tasks) < session_size and lease do
       {:ok, pid} = start_task(handler, ref, context, dest, dest_table, body)
       # if client sent duplicate tag don't track this one, client must dedup but
       # server won't be able to handle a future transmit_discarded
@@ -319,6 +330,21 @@ defmodule Mux.ServerSession do
     {[transmit_ping(@ping_tag)], state}
   end
 
+  defp handle_lease(time_unit, timeout, %State{lease: lease} = state) do
+    if lease, do: cancel_timer(lease)
+    case timeout do
+      0 ->
+        # no lease
+        state = %State{state | lease: false}
+        {[transmit_lease(@lease_tag, time_unit, 0)], state}
+      _ ->
+        # got a lease!
+        ms_timeout = System.convert_time_unit(timeout, time_unit, :millisecond)
+        state = %State{state | lease: start_timer(ms_timeout)}
+        {[transmit_lease(@lease_tag, time_unit, timeout)], state}
+    end
+  end
+
   # only send drain if haven't already
   defp handle_drain(%State{drain: false} = state),
     do: {[transmit_drain(@drain_tag)], %State{state | drain: @drain_tag}}
@@ -327,6 +353,9 @@ defmodule Mux.ServerSession do
 
   defp transmit_ping(tag),
     do: {:send, tag, :transmit_ping}
+
+  defp transmit_lease(tag, time_unit, timeout),
+    do: {:send, tag, {:transmit_lease, time_unit, timeout}}
 
   defp transmit_drain(tag),
     do: {:send, tag, :transmit_drain}

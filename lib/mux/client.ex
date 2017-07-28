@@ -48,7 +48,6 @@ defmodule Mux.Client do
   @callback nack(Mux.Packet.context, Mux.Packet.dest, Mux.Packet.dest_table,
             body :: binary, state) :: {:nack, Mux.Packet.context}
 
-
   @callback lease(System.time_unit, timeout, state) :: {:ok, state}
 
   @callback drain(state) :: {:ok, state}
@@ -388,7 +387,6 @@ defmodule Mux.Client do
 
   defp handle_lease(unit, timeout, %State{handler: handler} = state),
     do: {[], %State{state | handler: handler_lease(unit, timeout, handler)}}
-
 
   defp handle_drain(tag, %State{tags: :handshake} = state),
     do: handle_drain(tag, :handshake_drain, state)

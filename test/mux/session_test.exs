@@ -33,8 +33,6 @@ defmodule Mux.SessionTest do
   test "server drain causes close after tasks handled", context do
     %{client: cli, server: srv} = context
 
-    Process.flag(:trap_exit, true)
-
     ref1 = Mux.Client.dispatch(cli, %{}, "dest", %{}, "1")
     ref2 = Mux.Client.dispatch(cli, %{}, "dest", %{}, "2")
     assert_receive {task1, :dispatch, {%{}, "dest", %{}, "1"}}
@@ -57,8 +55,41 @@ defmodule Mux.SessionTest do
     send(task2, {self(), {:ok, %{}, "two"}})
     assert_receive {^ref2, {:ok, %{}, "two"}}
 
-    assert_receive {:EXIT, ^cli, :normal}
-    assert_receive {:EXIT, ^srv, :normal}
+    assert_receive {^cli, :terminate, :normal}
+    assert_receive {^srv, :terminate, :normal}
+  end
+
+  test "server lease causes nacks when expired", context do
+    %{client: cli, server: srv} = context
+
+    Mux.ServerSession.lease(srv, :millisecond, 1)
+    assert_receive {^cli, :lease, {:millisecond, 1}}
+    send(cli, {self(), {:ok, self()}})
+
+    :timer.sleep(20)
+
+    ref1 = Mux.Client.dispatch(cli, %{}, "dest", %{}, "1")
+    assert_receive {task1, :nack, {%{}, "dest", %{}, "1"}}
+    send(task1, {self(), {:nack, %{"no lease" => "sorry"}}})
+    assert_receive {^ref1, {:nack, %{"no lease" => "sorry"}}}
+
+    Mux.ServerSession.lease(srv, :second, 1)
+    assert_receive {^cli, :lease, {:millisecond, 1000}}
+    send(cli, {self(), {:ok, self()}})
+
+    ref2 = Mux.Client.dispatch(cli, %{}, "dest", %{}, "2")
+    assert_receive {task2, :dispatch, {%{}, "dest", %{}, "2"}}
+    send(task2, {self(), {:ok, %{}, "lease"}})
+    assert_receive {^ref2, {:ok, %{}, "lease"}}
+
+    Mux.ServerSession.lease(srv, :millisecond, 0)
+    assert_receive {^cli, :lease, {:millisecond, 0}}
+    send(cli, {self(), {:ok, self()}})
+
+    ref3 = Mux.Client.dispatch(cli, %{}, "dest", %{}, "3")
+    assert_receive {task3, :nack, {%{}, "dest", %{}, "3"}}
+    send(task3, {self(), {:nack, %{"no lease" => "not sorry"}}})
+    assert_receive {^ref3, {:nack, %{"no lease" => "not sorry"}}}
   end
 
   ## Helpers
