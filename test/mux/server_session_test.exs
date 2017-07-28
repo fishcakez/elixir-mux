@@ -5,7 +5,7 @@ defmodule Mux.ServerSessionTest do
     debug = context[:debug] || [:log]
     session_opts = context[:session_opts] || []
     opts = [debug: debug, session_opts: session_opts,
-            handshake: context[:handshake]]
+            headers: context[:headers]]
     {cli, srv} = pair(opts)
     {:ok, [client: cli, server: srv]}
   end
@@ -231,7 +231,7 @@ defmodule Mux.ServerSessionTest do
     assert_received {^srv, :terminate, {:tcp_error, :timeout}}
   end
 
-  @tag :handshake
+  @tag :headers
   test "server handles tinit check", context do
     %{client: cli, server: srv} = context
 
@@ -247,7 +247,7 @@ defmodule Mux.ServerSessionTest do
     assert_receive {^cli, {:packet, 1}, {:receive_init, 1, %{"hi" => "back"}}}
   end
 
-  @tag :handshake
+  @tag :headers
   test "server sends receive error on server error in handshake", context do
     %{client: cli, server: srv} = context
 
@@ -266,7 +266,7 @@ defmodule Mux.ServerSessionTest do
     assert_receive {^cli, {:packet, 1}, {:receive_init, 1, %{"hi" => "back"}}}
   end
 
-  @tag :handshake
+  @tag :headers
   test "server nacks before handshake", %{client: cli, server: srv} do
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "hello", %{}, "world"}}])
     assert_receive {^srv, :nack, {%{}, "hello", %{}, "world"}}
@@ -317,12 +317,10 @@ defmodule Mux.ServerSessionTest do
     srv_sock = Task.await(srv_task)
     :gen_tcp.close(l)
 
-    handshake = Keyword.get(opts, :handshake)
-
     cli = MuxProxy.spawn_link(cli_sock, opts)
     srv = MuxServerProxy.spawn_link(srv_sock, opts)
 
-    unless handshake do
+    unless Keyword.get(opts, :headers) do
       MuxProxy.commands(cli, [{:send, 1, {:transmit_init, 1, %{}}}])
 
       assert_receive {^srv, :handshake, %{}}

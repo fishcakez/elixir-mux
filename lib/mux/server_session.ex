@@ -10,10 +10,10 @@ defmodule Mux.ServerSession do
 
   defmodule State do
     @moduledoc false
-    @enforce_keys [:exchanges, :tasks, :session_size, :handler, :ref, :drain,
-                   :lease, :timer]
-    defstruct [:exchanges, :tasks, :session_size, :handler, :ref, :drain,
-               :lease, :timer]
+    @enforce_keys [:exchanges, :tasks, :session_size, :handler, :handshake,
+                   :ref, :drain, :lease, :timer]
+    defstruct [:exchanges, :tasks, :session_size, :handler, :handshake, :ref,
+               :drain, :lease, :timer]
   end
 
   @handshake_timeout 5_000
@@ -28,12 +28,10 @@ defmodule Mux.ServerSession do
 
   @type state :: any
   @type server :: Mux.Connection.connection
-  @type option :: Mux.Connection.option | {:handshake_timeout, timeout}
-
-  @type session_option ::
-    {:session_size, pos_integer} |
-    {:frame_size, pos_integer} |
-    {:ping_interval, timeout}
+  @type option ::
+    Mux.Connection.option |
+    {:handshake, {module, any}} |
+    {:handshake_timeout, timeout}
 
   @type result ::
     {:ok, Mux.Packet.context, body :: binary} |
@@ -43,10 +41,6 @@ defmodule Mux.ServerSession do
 
   @callback init(state) ::
     {:ok, state}
-
-  @callback handshake(Mux.Packet.headers, state) ::
-    {:ok, Mux.Packet.headers, [session_option], state} |
-    {:error, %Mux.ServerError{}, state}
 
   @callback dispatch(Mux.Packet.context, Mux.Packet.dest, Mux.Packet.dest_table,
             body :: binary, state) :: result
@@ -66,21 +60,23 @@ defmodule Mux.ServerSession do
 
   @spec enter_loop(module, :gen_tcp.socket, state, [option]) :: no_return
   def enter_loop(mod, sock, state, opts) do
-    {srv_opts, conn_opts} = Keyword.split(opts, [:handshake_timeout])
+    {srv_opts, opts} = Keyword.split(opts, [:handshake, :handshake_timeout])
     arg = {{mod, state}, srv_opts}
-    Mux.Connection.enter_loop(__MODULE__, sock, arg, conn_opts)
+    Mux.Connection.enter_loop(__MODULE__, sock, arg, opts)
   end
 
   @doc false
   def init({handler, opts}) do
     Process.flag(:trap_exit, true)
+    default = fn -> Application.fetch_env!(:mux, :server_handshake) end
+    handshake = Keyword.get_lazy(opts, :handshake, default)
     timeout = Keyword.get(opts, :handshake_timeout, @handshake_timeout)
-    handler = handler_init(handler)
+    {handler, handshake} = pair_init(handler, handshake)
     # session_size is 0 until handshake succeeds, lease is assumed to be held
-    # for infinity until told otherwise
+    # for infinity until told otherwise.
     state = %State{exchanges: %{}, tasks: %{}, session_size: 0, ref: make_ref(),
-                   handler: handler, drain: false, lease: make_ref(),
-                   timer: {:handshake, start_timer(timeout)}}
+                   handler: handler, handshake: handshake, drain: false,
+                   lease: make_ref(), timer: {:handshake, start_timer(timeout)}}
     {[], state}
   end
 
@@ -119,7 +115,8 @@ defmodule Mux.ServerSession do
     terminate(reason, state)
     exit(reason)
   end
-  def terminate(reason, %State{tasks: tasks, handler: handler}) do
+  def terminate(reason, state) do
+    %State{tasks: tasks, handler: handler, handshake: handshake} = state
     pids = Map.keys(tasks)
     for pid <- pids do
       Process.exit(pid, :kill)
@@ -130,7 +127,7 @@ defmodule Mux.ServerSession do
           :ok
       end
     end
-    handler_terminate(reason, handler)
+    pair_terminate(reason, handler, handshake)
   end
 
   # 0 tag is a one way, only handle one-way transmit_discard
@@ -287,9 +284,9 @@ defmodule Mux.ServerSession do
   defp handle_init(tag, _, state),
     do: {[receive_error(tag, "reinitialization not supported")], state}
 
-  defp handshake(tag, headers, tref, %State{handler: handler} = state) do
-    case handler_handshake(headers, handler) do
-      {:ok, headers, opts, handler} ->
+  defp handshake(tag, headers, tref, %State{handshake: handshake} = state) do
+    case handshake(headers, handshake) do
+      {:ok, headers, opts, handshake} ->
         cancel_timer(tref)
         session_size = Keyword.get(opts, :session_size, @session_size)
         ping_interval = Keyword.get(opts, :ping_interval, @ping_interval)
@@ -297,20 +294,32 @@ defmodule Mux.ServerSession do
 
         commands = [receive_init(tag, @mux_version, headers),
                     {:frame_size, frame_size}]
-        state = %State{state | handler: handler, session_size: session_size,
+        state = %State{state | handshake: handshake, session_size: session_size,
                                timer: start_interval(ping_interval)}
         {commands, state}
-      {:error, %Mux.ServerError{message: why}, handler} ->
-        {[receive_error(tag, why)], %State{state | handler: handler}}
+      {:error, %Mux.ServerError{message: why}, handshake} ->
+        {[receive_error(tag, why)], %State{state | handshake: handshake}}
     end
   end
 
-  defp handler_init({mod, state}) do
-    {:ok, state} = apply(mod, :init, [state])
-    {mod, state}
+  defp pair_init({mod1, state1}, {mod2, state2}) do
+    {:ok, state1} = apply(mod1, :init, [state1])
+    try do
+      {:ok, state2} = apply(mod2, :init, [state2])
+      state2
+    catch
+      kind, reason ->
+        stack = System.stacktrace()
+        # undo mod1.init/1 as terminate/2 won't be called
+        apply(mod1, :terminate, [reason, state1])
+        :erlang.raise(kind, reason, stack)
+    else
+      state2 ->
+        {{mod1, state1}, {mod2, state2}}
+    end
   end
 
-  defp handler_handshake(headers, {mod, state}) do
+  defp handshake(headers, {mod, state}) do
     case apply(mod, :handshake, [headers, state]) do
       {:ok, headers, opts, state} ->
         {:ok, headers, opts, {mod, state}}
@@ -322,8 +331,14 @@ defmodule Mux.ServerSession do
   defp handler_nack(context, dest, dest_table, body, {mod, state}),
     do: apply(mod, :nack, [context, dest, dest_table, body, state])
 
-  defp handler_terminate(reason, {mod, state}),
-    do: apply(mod, :terminate, [reason, state])
+  defp pair_terminate(reason, {mod1, state1}, {mod2, state2}) do
+    # reverse order of pair_init/2
+    try do
+      apply(mod2, :terminate, [reason, state2])
+    after
+      apply(mod1, :terminate, [reason, state1])
+    end
+  end
 
   defp handle_ping(ping_interval, state) do
     state = %State{state | timer: {@ping_tag, start_interval(ping_interval)}}

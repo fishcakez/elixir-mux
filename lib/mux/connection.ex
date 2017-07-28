@@ -97,6 +97,9 @@ defmodule Mux.Connection do
 
 
   @doc false
+  # if state is :init then init/1 failed and no state!
+  def terminate(_, :init, _),
+    do: :ok
   def terminate(:normal, _, %Data{acks: acks, fragments: fragments} = data) do
     if :queue.is_empty(acks) and map_size(fragments) === 0 do
       terminate(:normal, data)

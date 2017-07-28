@@ -11,8 +11,9 @@ defmodule Mux.Client do
   defmodule State do
     @moduledoc false
     @enforce_keys [:tags, :exchanges, :monitors, :refs, :socket, :timer,
-                   :handler]
-    defstruct [:tags, :exchanges, :monitors, :refs, :socket, :timer, :handler]
+                   :handler, :handshake]
+    defstruct [:tags, :exchanges, :monitors, :refs, :socket, :timer,
+               :handler, :handshake]
   end
 
   @discarded_message "process discarded"
@@ -26,7 +27,10 @@ defmodule Mux.Client do
 
   @type state :: any
   @type client :: Mux.Connection.connection
-  @type option :: Mux.Connection.option |  {:handshake_timeout, timeout}
+  @type option ::
+    Mux.Connection.option |
+    {:handshake, {module, any}} |
+    {:handshake_timeout, timeout}
 
   @type session_option ::
     {:session_size, pos_integer} |
@@ -39,11 +43,7 @@ defmodule Mux.Client do
     {:nack, Mux.Packet.context} |
     {:error, %Mux.ServerError{}}
 
-  @callback init(state) ::
-    {:ok, Mux.Packet.headers, state}
-
-  @callback handshake(Mux.Packet.headers, state) ::
-    {:ok, [session_option], state}
+  @callback init(state) :: {:ok, state}
 
   @callback nack(Mux.Packet.context, Mux.Packet.dest, Mux.Packet.dest_table,
             body :: binary, state) :: {:nack, Mux.Packet.context}
@@ -84,17 +84,19 @@ defmodule Mux.Client do
 
   @spec enter_loop(module, :gen_tcp.socket, state, [option]) :: no_return
   def enter_loop(mod, sock, state, opts) do
-    {cli_opts, conn_opts} = Keyword.split(opts, [:handshake_timeout])
+    {cli_opts, opts} = Keyword.split(opts, [:handshake, :handshake_timeout])
     args = {{mod, state}, sock, cli_opts}
-    Mux.Connection.enter_loop(__MODULE__, sock, args, conn_opts)
+    Mux.Connection.enter_loop(__MODULE__, sock, args, opts)
   end
 
   @doc false
   def init({handler, sock, opts}) do
+    default = fn -> Application.fetch_env!(:mux, :client_handshake) end
+    handshake = Keyword.get_lazy(opts, :handshake, default)
     timeout = Keyword.get(opts, :handshake_timeout, @handshake_timeout)
-    {headers, handler} = handler_init(handler)
+    {headers, handler, handshake} = pair_init(handler, handshake)
     state = %State{tags: :handshake, exchanges: %{}, monitors: %{}, refs: %{},
-                   handler: handler, socket: sock,
+                   handler: handler, handshake: handshake, socket: sock,
                    timer: {@handshake_tag, start_timer(timeout)}}
     {[{:send, @handshake_tag, {:transmit_init, @mux_version, headers}}], state}
   end
@@ -148,8 +150,8 @@ defmodule Mux.Client do
     terminate(reason, state)
     exit(reason)
   end
-  def terminate(reason, %State{handler: handler}),
-    do: handler_terminate(reason, handler)
+  def terminate(reason, %State{handler: handler, handshake: handshake}),
+    do: pair_terminate(reason, handler, handshake)
 
   # 0 tag is a one way
   defp handle_packet(0, {:transmit_lease, unit, timeout}, state),
@@ -332,34 +334,45 @@ defmodule Mux.Client do
     case state do
       %State{tags: :handshake, timer: {^tag, tref}} ->
         cancel_timer(tref)
-        handshake(headers, state)
+        handle_handshake(headers, state)
       %State{tags: :handshake_drain, timer: {^tag, tref}} ->
         cancel_timer(tref)
-        {actions, state} = handshake(headers, state)
+        {actions, state} = handle_handshake(headers, state)
         {actions, %State{state | tags: :drain}}
       state ->
         {[receive_error(tag, "unexpected rinit")], state}
     end
   end
 
-  defp handshake(headers, %State{handler: handler} = state) do
-    {opts, handler} = handler_handshake(headers, handler)
+  defp handle_handshake(headers, %State{handshake: handshake} = state) do
+    {opts, handshake} = handshake(headers, handshake)
 
     session_size = Keyword.get(opts, :session_size, @session_size)
     ping_interval = Keyword.get(opts, :ping_interval, @ping_interval)
     frame_size = Keyword.get(opts, :frame_size, @frame_size)
 
-    state = %State{state | handler: handler, tags: tags_new(session_size),
+    state = %State{state | handshake: handshake, tags: tags_new(session_size),
                            timer: start_interval(ping_interval)}
     {[frame_size: frame_size], state}
   end
 
-  defp handler_init({mod, state}) do
-    {:ok, headers, state} = apply(mod, :init, [state])
-    {headers, {mod, state}}
+  defp pair_init({mod1, state1}, {mod2, state2}) do
+    {:ok, state1} = apply(mod1, :init, [state1])
+    try do
+      {:ok, _headers, _state2} = apply(mod2, :init, [state2])
+    catch
+      kind, reason ->
+        stack = System.stacktrace()
+        # undo mod1.init/1 as terminate/2 won't be called
+        apply(mod1, :terminate, [reason, state1])
+        :erlang.raise(kind, reason, stack)
+    else
+      {:ok, headers, state2} ->
+        {headers, {mod1, state1}, {mod2, state2}}
+    end
   end
 
-  defp handler_handshake(headers, {mod, state}) do
+  defp handshake(headers, {mod, state}) do
     {:ok, opts, state} = apply(mod, :handshake, [headers, state])
     {opts, {mod, state}}
   end
@@ -377,8 +390,14 @@ defmodule Mux.Client do
     {mod, state}
   end
 
-  defp handler_terminate(reason, {mod, state}),
-    do: apply(mod, :terminate, [reason, state])
+  defp pair_terminate(reason, {mod1, state1}, {mod2, state2}) do
+    # reverse order of pair_init/2
+    try do
+      apply(mod2, :terminate, [reason, state2])
+    after
+      apply(mod1, :terminate, [reason, state1])
+    end
+  end
 
   defp handle_ping(ping_interval, state) do
     state = %State{state | timer: {@ping_tag, start_interval(ping_interval)}}

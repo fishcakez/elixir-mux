@@ -7,7 +7,7 @@ defmodule Mux.ServerTest do
     session_opts = context[:session_opts] || []
     grace = context[:grace] || 5_000
     opts = [debug: debug, session_opts: session_opts, grace: grace]
-    {cli, srv, sup} = pair(dest, [port: 0] ++ opts)
+    {cli, srv, sup} = pair(dest, opts)
     {:ok, [client: cli, server: srv, supervisor: sup, dest: dest]}
   end
 
@@ -51,7 +51,8 @@ defmodule Mux.ServerTest do
   end
 
   defp pair(dest, opts) do
-    {:ok, sup} = Mux.Server.start_link(MuxServerProxy, dest, self(), opts)
+    srv_opts = [port: 0, handshake: {MuxServerProxy.Handshake, self()}] ++ opts
+    {:ok, sup} = Mux.Server.start_link(MuxServerProxy, dest, self(), srv_opts)
     children = Supervisor.which_children(sup)
     # sync with sock pid to make sure it's added the socket
     {_, sock_pid, _, _} = List.keyfind(children, Mux.Server.Socket, 0)
