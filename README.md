@@ -4,7 +4,7 @@ Mux session layer for multiplexing over TCP.
 
 ## Installation
 
-Requires OTP >= 19.2
+Requires Erlang/OTP >= 19.3.6.1, Elixir ~> 1.5
 
 ```elixir
 def deps do

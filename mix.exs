@@ -4,7 +4,7 @@ defmodule Mux.Mixfile do
   def project do
     [app: :mux,
      version: "0.1.0",
-     elixir: "~> 1.4",
+     elixir: "~> 1.5",
      build_embedded: Mix.env == :prod,
      start_permanent: Mix.env == :prod,
      deps: deps()]
@@ -15,6 +15,7 @@ defmodule Mux.Mixfile do
   end
 
   defp deps do
-    [{:stream_data, github: "whatyouhide/stream_data", only: :test}]
+    [{:acceptor_pool, "1.0.0-rc.0", optional: true},
+     {:stream_data, github: "whatyouhide/stream_data", only: :test}]
   end
 end

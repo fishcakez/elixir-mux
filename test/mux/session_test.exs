@@ -1,4 +1,4 @@
-defmodule Mux.IntegrationTest do
+defmodule Mux.SessionTest do
   use ExUnit.Case, async: true
 
   setup context do
@@ -40,7 +40,7 @@ defmodule Mux.IntegrationTest do
     assert_receive {task1, :dispatch, {%{}, "dest", %{}, "1"}}
     assert_receive {task2, :dispatch, {%{}, "dest", %{}, "2"}}
 
-    Mux.Server.drain(srv)
+    Mux.ServerSession.drain(srv)
     assert_receive {^cli, :drain, nil}
     send(cli, {self(), {:ok, self()}})
 

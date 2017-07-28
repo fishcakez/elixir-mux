@@ -1,1 +1,2 @@
-%{"stream_data": {:git, "https://github.com/whatyouhide/stream_data.git", "18f105860f0d8e23ec530016564d4f0104241bc2", []}}
+%{"acceptor_pool": {:hex, :acceptor_pool, "1.0.0-rc.0", "679d741df87fc13599b1aef2df8f78f1f880449a6befab7c44fb6fae0e92a2de", [:rebar3], [], "hexpm"},
+  "stream_data": {:git, "https://github.com/whatyouhide/stream_data.git", "18f105860f0d8e23ec530016564d4f0104241bc2", []}}

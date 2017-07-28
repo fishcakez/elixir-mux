@@ -89,7 +89,7 @@ defmodule MuxClientProxy do
   end
 end
 defmodule MuxServerProxy do
-  @behaviour Mux.Server
+  @behaviour Mux.ServerSession
 
   def spawn_link(socket, opts) do
     pid = :proc_lib.spawn_link(__MODULE__, :init_it, [self(), opts])
@@ -101,7 +101,7 @@ defmodule MuxServerProxy do
   def init_it(parent, opts) do
     receive do
       {^parent, socket} ->
-        Mux.Server.enter_loop(__MODULE__, socket, parent, opts)
+        Mux.ServerSession.enter_loop(__MODULE__, socket, parent, opts)
     end
   end
 
