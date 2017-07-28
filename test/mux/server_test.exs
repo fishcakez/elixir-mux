@@ -53,6 +53,9 @@ defmodule Mux.ServerTest do
   defp pair(dest, opts) do
     {:ok, sup} = Mux.Server.start_link(MuxServerProxy, dest, self(), opts)
     children = Supervisor.which_children(sup)
+    # sync with sock pid to make sure it's added the socket
+    {_, sock_pid, _, _} = List.keyfind(children, Mux.Server.Socket, 0)
+    _ = :sys.get_state(sock_pid)
     {_, pool, _, _} = List.keyfind(children, Mux.Server.Pool, 0)
     [{_, {ip, port}, _, _}] = :acceptor_pool.which_sockets(pool)
 
