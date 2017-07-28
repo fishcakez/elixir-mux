@@ -11,7 +11,7 @@ defmodule Mux.Mixfile do
   end
 
   def application do
-    []
+    [mod: {Mux.Application, nil}]
   end
 
   defp deps do

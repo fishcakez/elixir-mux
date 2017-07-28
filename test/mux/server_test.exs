@@ -2,15 +2,23 @@ defmodule Mux.ServerTest do
   use ExUnit.Case, async: true
 
   setup context do
+    dest = "#{inspect context[:case]} #{context[:test]}"
     debug = context[:debug] || [:log]
     session_opts = context[:session_opts] || []
     grace = context[:grace] || 5_000
     opts = [debug: debug, session_opts: session_opts, grace: grace]
-    {cli, srv, sup} = pair(opts)
-    {:ok, [client: cli, server: srv, supervisor: sup]}
+    {cli, srv, sup} = pair(dest, [port: 0] ++ opts)
+    {:ok, [client: cli, server: srv, supervisor: sup, dest: dest]}
   end
 
-  test "server handles dispatch and closes gracefully", context do
+  test "server registers itself with destination", context do
+    %{supervisor: sup, dest: dest} = context
+    assert Registry.keys(Mux.Server, sup) == [dest]
+    assert Registry.lookup(Mux.Server, dest) == [{sup, MuxServerProxy}]
+    assert stop(context) == {:normal, :normal}
+  end
+
+  test "server handles dispatch", context do
     %{client: cli} = context
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "hi", %{}, "world"}}])
     assert_receive {task, :dispatch, {%{}, "hi", %{}, "world"}}
@@ -42,8 +50,8 @@ defmodule Mux.ServerTest do
     assert_receive {:DOWN, ^mon, _, _, :killed}
   end
 
-  defp pair(opts) do
-    {:ok, sup} = Mux.Server.start_link(MuxServerProxy, self(), [port: 0] ++ opts)
+  defp pair(dest, opts) do
+    {:ok, sup} = Mux.Server.start_link(MuxServerProxy, dest, self(), opts)
     children = Supervisor.which_children(sup)
     {_, pool, _, _} = List.keyfind(children, Mux.Server.Pool, 0)
     [{_, {ip, port}, _, _}] = :acceptor_pool.which_sockets(pool)

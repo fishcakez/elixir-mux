@@ -17,15 +17,15 @@ defmodule Mux.Server do
     {:port, :inet.port_number} |
     {:socket_opt, [:gen_tcp.listen_option]}
 
-
-  @spec start_link(module, arg :: any, [option]) :: Supervisor.on_start
-  def start_link(module, arg, opts) do
-    {sup_opts, opts} = Keyword.split(opts, [:name])
-    Supervisor.start_link(__MODULE__, {module, arg, opts}, sup_opts)
+  @spec start_link(module, Mux.Packet.dest, arg :: any, [option]) ::
+    Supervisor.on_start
+  def start_link(module, dest, arg, opts) when is_binary(dest) do
+    Supervisor.start_link(__MODULE__, {module, dest, arg, opts}, [])
   end
 
   @doc false
-  def init({module, arg, opts}) do
+  def init({module, dest, arg, opts}) do
+    {:ok, _} = Registry.register(Mux.Server, dest, module)
     {port, opts} = pop_port!(opts)
     {sock_opts, pool_opts} = Keyword.split(opts, [:socket_opt])
     children = [{Mux.Server.Pool, {module, arg, pool_opts}},
