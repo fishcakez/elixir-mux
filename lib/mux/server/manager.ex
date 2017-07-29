@@ -1,8 +1,7 @@
 defmodule Mux.Server.Manager do
   @moduledoc false
 
-  use GenServer
-
+  @behaviour :gen_statem
   @behaviour :acceptor
 
   @drain_alarms []
@@ -16,44 +15,76 @@ defmodule Mux.Server.Manager do
     Process.flag(:trap_exit, true)
     {man_opts, opts} = Keyword.split(opts, [:drain_alarms])
     pid = spawn_worker(module, dest, ref, arg, opts)
-    :ok = :gen_tcp.controlling_process(sock, pid)
-    send(pid, {:enter_loop, ref, sock})
-    enter_loop(pid, ref, man_opts)
+    actions = [{:next_event, :internal, {:init, sock, man_opts}}]
+    :gen_statem.enter_loop(__MODULE__, [], :init, {pid, ref}, self(), actions)
   end
 
   def acceptor_terminate(_, _),
     do: :ok
 
-  def handle_info({:DOWN, ref, _, _, _}, {pid, ref} = state) do
+  def init(_),
+    do: {:stop, :acceptor}
+
+  def callback_mode(),
+    do: [:state_functions, :state_enter]
+
+  def init(:enter, :init, _data),
+    do: :keep_state_and_data
+
+  def init(:internal, {:init, sock, opts}, {pid, ref} = data) do
+    # give away inside loop for logging on error
+    case :gen_tcp.controlling_process(sock, pid) do
+      :ok ->
+        send(pid, {:enter_loop, ref, sock})
+        state = watch_alarms(ref, opts)
+        {:next_state, state, data}
+      {:error, reason} ->
+        {:stop, {:tcp_error, reason}}
+    end
+  end
+
+  def drain(:enter, _, {pid, _}) do
     Mux.ServerSession.drain(pid)
-    {:noreply, state}
+    :keep_state_and_data
   end
-  def handle_info({:SET, ref, _}, {pid, ref} = state) do
-    Mux.ServerSession.drain(pid)
-    {:noreply, state}
+
+  def drain(:info, msg, data),
+    do: info(msg, data)
+
+  def lease(:enter, _, _),
+    do: :keep_state_and_data
+
+  def lease(:info, msg, data),
+    do: info(msg, data)
+
+  defp info({:DOWN, ref, _, _, _}, {_, ref} = data) do
+    {:next_state, :drain, data}
   end
-  def handle_info({:CLEAR, ref, _}, {_, ref} = state) do
-    # already draining so can't do anything
-    {:noreply, state}
+  defp info({:SET, ref, _}, {_, ref} = data) do
+    {:next_state, :drain, data}
   end
-  def handle_info({:EXIT, pid, reason}, {pid, _} = state) do
+  defp info({:CLEAR, ref, _}, {_, ref}) do
+    # already draining or don't want to lease immediately as would allow on all
+    :keep_state_and_data
+  end
+  defp info({:EXIT, pid, reason}, {pid, _}) do
     case reason do
       {:tcp_error, reason} ->
         # want transient exit for tcp_error's and no reporting (session will
         # have reported)
-        {:stop, {:shutdown, reason}, state}
+        {:stop, {:shutdown, reason}}
       reason ->
         # hopefully :normal for clean stop but could be crash
-        {:stop, reason, state}
+        {:stop, reason}
     end
   end
-  def handle_info(msg, state) do
+  defp info(msg, _) do
     :error_logger.error_msg("#{__MODULE__} received unexpected message: ~p~n",
                             [msg])
-    {:noreply, state}
+    :keep_state_and_data
   end
 
-  def terminate(_, {pid, _}) do
+  def terminate(_, _, {pid, _}) do
     # monitor as pid could have exited and so :noproc
     mon = Process.monitor(pid)
     Process.exit(pid, :shutdown)
@@ -65,16 +96,14 @@ defmodule Mux.Server.Manager do
 
   ## Helpers
 
-  defp enter_loop(pid, ref, opts) do
-    watch_drain_alarms(pid, ref, opts)
-    :gen_server.enter_loop(__MODULE__, [], {pid, ref})
-  end
-
-  defp watch_drain_alarms(pid, ref, opts) do
+  defp watch_alarms(ref, opts) do
     alarms = Keyword.get(opts, :drain_alarms, @drain_alarms)
     # register returns true if alarm is set
-    if Enum.any?(alarms, &Mux.Alarm.register(Mux.Alarm, &1, ref)),
-      do: Mux.ServerSession.drain(pid)
+    if Enum.any?(alarms, &Mux.Alarm.register(Mux.Alarm, &1, ref)) do
+      :drain
+    else
+      :lease
+    end
   end
 
   defp spawn_worker(module, dest, ref, arg, opts) do
