@@ -11,7 +11,8 @@ defmodule Mux.Mixfile do
   end
 
   def application do
-    [mod: {Mux.Application, nil}]
+    [mod: {Mux.Application, nil},
+     extra_applications: [:sasl]]
   end
 
   defp deps do

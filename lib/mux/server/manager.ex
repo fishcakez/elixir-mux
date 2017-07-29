@@ -5,6 +5,8 @@ defmodule Mux.Server.Manager do
 
   @behaviour :acceptor
 
+  @drain_alarms []
+
   def acceptor_init(_, lsock, {module, dest, arg, opts}) do
     ref = :erlang.monitor(:port, lsock)
     {:ok, {module, dest, ref, arg, opts}}
@@ -12,10 +14,11 @@ defmodule Mux.Server.Manager do
 
   def acceptor_continue(_, sock, {module, dest, ref, arg, opts}) do
     Process.flag(:trap_exit, true)
+    {man_opts, opts} = Keyword.split(opts, [:drain_alarms])
     pid = spawn_worker(module, dest, ref, arg, opts)
     :ok = :gen_tcp.controlling_process(sock, pid)
     send(pid, {:enter_loop, ref, sock})
-    :gen_server.enter_loop(__MODULE__, [], {pid, ref})
+    enter_loop(pid, ref, man_opts)
   end
 
   def acceptor_terminate(_, _),
@@ -23,6 +26,14 @@ defmodule Mux.Server.Manager do
 
   def handle_info({:DOWN, ref, _, _, _}, {pid, ref} = state) do
     Mux.ServerSession.drain(pid)
+    {:noreply, state}
+  end
+  def handle_info({:SET, ref, _}, {pid, ref} = state) do
+    Mux.ServerSession.drain(pid)
+    {:noreply, state}
+  end
+  def handle_info({:CLEAR, ref, _}, {_, ref} = state) do
+    # already draining so can't do anything
     {:noreply, state}
   end
   def handle_info({:EXIT, pid, reason}, {pid, _} = state) do
@@ -53,6 +64,18 @@ defmodule Mux.Server.Manager do
   end
 
   ## Helpers
+
+  defp enter_loop(pid, ref, opts) do
+    watch_drain_alarms(pid, ref, opts)
+    :gen_server.enter_loop(__MODULE__, [], {pid, ref})
+  end
+
+  defp watch_drain_alarms(pid, ref, opts) do
+    alarms = Keyword.get(opts, :drain_alarms, @drain_alarms)
+    # register returns true if alarm is set
+    if Enum.any?(alarms, &Mux.Alarm.register(Mux.Alarm, &1, ref)),
+      do: Mux.ServerSession.drain(pid)
+  end
 
   defp spawn_worker(module, dest, ref, arg, opts) do
     {spawn_opts, opts} = Keyword.split(opts, [:spawn_opt])

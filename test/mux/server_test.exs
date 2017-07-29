@@ -6,9 +6,13 @@ defmodule Mux.ServerTest do
     debug = context[:debug] || [:log]
     session_opts = context[:session_opts] || []
     grace = context[:grace] || 5_000
-    opts = [debug: debug, session_opts: session_opts, grace: grace]
+    alarm_id = {:drain, dest}
+    opts = [debug: debug, session_opts: session_opts, grace: grace,
+            drain_alarms: [alarm_id]]
+    if context[:set_alarm], do: :alarm_handler.set_alarm({alarm_id, self()})
     {cli, srv, sup} = pair(dest, opts)
-    {:ok, [client: cli, server: srv, supervisor: sup, dest: dest]}
+    {:ok, [client: cli, server: srv, supervisor: sup, dest: dest,
+           alarm_id: alarm_id]}
   end
 
   test "server registers itself with destination", context do
@@ -50,6 +54,26 @@ defmodule Mux.ServerTest do
     assert_receive {:DOWN, ^mon, _, _, :killed}
   end
 
+  @tag :set_alarm
+  @tag :capture_log
+  test "server drains if alarm already set", context do
+    %{client: cli} = context
+    assert_received {^cli, {:packet, tag}, :transmit_drain}
+    MuxProxy.commands(cli, [{:send, tag, :receive_drain}])
+    assert stop(context) == {:normal, :normal}
+  end
+
+  @tag :capture_log
+  test "server drains once alarm is set", context do
+    %{client: cli, alarm_id: alarm_id} = context
+    refute_received {^cli, {:packet, _}, :transmit_drain}
+    :alarm_handler.set_alarm({alarm_id, self()})
+    assert_receive {^cli, {:packet, tag}, :transmit_drain}
+    MuxProxy.commands(cli, [{:send, tag, :receive_drain}])
+    context = Map.put(context, :set_alarm, true)
+    assert stop(context) == {:normal, :normal}
+  end
+
   defp pair(dest, opts) do
     srv_opts = [port: 0, handshake: {MuxServerProxy.Handshake, self()}] ++ opts
     {:ok, sup} = Mux.Server.start_link(MuxServerProxy, dest, self(), srv_opts)
@@ -73,12 +97,14 @@ defmodule Mux.ServerTest do
     {cli, srv, sup}
   end
 
-  defp stop(%{client: cli, server: srv, supervisor: sup}) do
+  defp stop(%{client: cli, server: srv, supervisor: sup} = context) do
     # parent of sup (and it traps exits) so it will stop normally asynchronously
     Process.exit(sup, :normal)
     # srv should ask us to drain to initiate clean shutdown
-    assert_receive {^cli, {:packet, tag}, :transmit_drain}
-    MuxProxy.commands(cli, [{:send, tag, :receive_drain}])
+    unless context[:set_alarm] do
+      assert_receive {^cli, {:packet, tag}, :transmit_drain}
+      MuxProxy.commands(cli, [{:send, tag, :receive_drain}])
+    end
     # close writes on client to trigger half close and server should trigger
     # clean close
     {_, %{sock: sock}} = :sys.get_state(cli)
