@@ -5,14 +5,14 @@ defmodule Mux.Server.Manager do
 
   @behaviour :acceptor
 
-  def acceptor_init(_, lsock, {module, arg, opts}) do
+  def acceptor_init(_, lsock, {module, dest, arg, opts}) do
     ref = :erlang.monitor(:port, lsock)
-    {:ok, {module, ref, arg, opts}}
+    {:ok, {module, dest, ref, arg, opts}}
   end
 
-  def acceptor_continue(_, sock, {module, ref, arg, opts}) do
+  def acceptor_continue(_, sock, {module, dest, ref, arg, opts}) do
     Process.flag(:trap_exit, true)
-    pid = spawn_worker(module, ref, arg, opts)
+    pid = spawn_worker(module, dest, ref, arg, opts)
     :ok = :gen_tcp.controlling_process(sock, pid)
     send(pid, {:enter_loop, ref, sock})
     :gen_server.enter_loop(__MODULE__, [], {pid, ref})
@@ -54,13 +54,14 @@ defmodule Mux.Server.Manager do
 
   ## Helpers
 
-  defp spawn_worker(module, ref, arg, opts) do
+  defp spawn_worker(module, dest, ref, arg, opts) do
     {spawn_opts, opts} = Keyword.split(opts, [:spawn_opt])
-    spawn_args = [module, ref, arg, opts]
+    spawn_args = [module, dest, ref, arg, opts]
     :proc_lib.spawn_opt(__MODULE__, :init_worker, spawn_args, spawn_opts)
   end
 
-  def init_worker(module, ref, args, opts) do
+  def init_worker(module, dest, ref, args, opts) do
+    {:ok, _} = Registry.register(Mux.ServerSession, dest, module)
     receive do
       {:enter_loop, ^ref, sock} ->
         Mux.ServerSession.enter_loop(module, sock, args, opts)

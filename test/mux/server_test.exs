@@ -53,12 +53,7 @@ defmodule Mux.ServerTest do
   defp pair(dest, opts) do
     srv_opts = [port: 0, handshake: {MuxServerProxy.Handshake, self()}] ++ opts
     {:ok, sup} = Mux.Server.start_link(MuxServerProxy, dest, self(), srv_opts)
-    children = Supervisor.which_children(sup)
-    # sync with sock pid to make sure it's added the socket
-    {_, sock_pid, _, _} = List.keyfind(children, Mux.Server.Socket, 0)
-    _ = :sys.get_state(sock_pid)
-    {_, pool, _, _} = List.keyfind(children, Mux.Server.Pool, 0)
-    [{_, {ip, port}, _, _}] = :acceptor_pool.which_sockets(pool)
+    [{_, {ip, port}}] = Registry.lookup(Mux.Server.Socket, dest)
 
     {:ok, cli_sock} = :gen_tcp.connect(ip, port, [active: false])
     cli = MuxProxy.spawn_link(cli_sock, opts)
@@ -67,10 +62,9 @@ defmodule Mux.ServerTest do
     # process is alive and then we can discover it
     MuxProxy.commands(cli, [{:send, 1, :transmit_ping}])
     assert_receive {^cli, {:packet, 1}, :receive_ping}
-    [{_, manager, _, _}] = :acceptor_pool.which_children(pool)
-    {srv, _} = :sys.get_state(manager)
+    [{srv, _}] = Registry.lookup(Mux.ServerSession, dest)
 
-    # performa handshake
+    # perform a handshake
     MuxProxy.commands(cli, [{:send, 2, {:transmit_init, 1, %{}}}])
     assert_receive {^srv, :handshake, %{}}
     send(srv, {self(), {:ok, %{}, Keyword.get(opts, :session_opts, []), self()}})

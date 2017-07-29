@@ -5,30 +5,33 @@ defmodule Mux.Server.Socket do
 
   @listen_options [active: false, reuseaddr: true]
 
-  def start_link({port, opts}) do
-    parent = self()
-    GenServer.start_link(__MODULE__, {parent, port, opts})
+  @spec child_spec({Mux.Packet.dest, :inet.port_number, Keyword.t}) ::
+    Supervisor.child_spec
+  def child_spec({dest, port, opts}) do
+    %{id: {dest, __MODULE__},
+      start: {__MODULE__, :start_link, [dest, port, opts]},
+      type: :worker}
   end
 
-  def init({parent, port, opts}) do
+  def start_link(dest, port, opts) do
+    name = {:via, Registry, {__MODULE__, dest}}
+    GenServer.start_link(__MODULE__, {dest, port, opts}, [name: name])
+  end
+
+  def init({dest, port, opts}) do
     # trap exit so can sync close socket on terminate
     Process.flag(:trap_exit, true)
     case :gen_tcp.listen(port, @listen_options ++ opts) do
       {:ok, sock} = ok ->
-        send(self(), {:accept_socket, parent, sock})
+        {:ok, sockname} = :inet.sockname(sock)
+        _ = Registry.update_value(Mux.Server.Socket, dest, fn _ -> sockname end)
+        {:ok, _} = Mux.Server.Pool.accept_socket(dest, sock)
         ok
       {:error, reason} ->
         {:stop, reason}
     end
   end
 
-  def handle_info({:accept_socket, parent, sock}, sock) do
-    children = Supervisor.which_children(parent)
-    {_, pool, _, _} = List.keyfind(children, Mux.Server.Pool, 0)
-    acceptors = System.schedulers_online()
-    {:ok, _} = :acceptor_pool.accept_socket(pool, sock, acceptors)
-    {:noreply, sock}
-  end
   def handle_info({:EXIT, sock, reason}, sock) do
     {:stop, reason, sock}
   end
