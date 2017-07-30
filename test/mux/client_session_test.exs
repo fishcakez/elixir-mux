@@ -263,6 +263,20 @@ defmodule Mux.ClientSessionTest do
     assert_received {^cli, :terminate, :normal}
   end
 
+  test "client shutdowns on cast drain if no exchanges", context do
+    %{client: cli, server: srv} = context
+    Process.flag(:trap_exit, true)
+
+    Mux.ClientSession.drain(cli)
+    assert_receive {^cli, :drain, nil}
+    send(cli, {self(), {:ok, self()}})
+
+    assert_receive {:EXIT, ^srv, :normal}
+    assert_received {^srv, :terminate, :normal}
+    assert_receive {:EXIT, ^cli, :normal}
+    assert_received {^cli, :terminate, :normal}
+  end
+
   test "client shutdowns on drain once last exchange responds", context do
     %{client: cli, server: srv} = context
     Process.flag(:trap_exit, true)
@@ -281,7 +295,31 @@ defmodule Mux.ClientSessionTest do
     assert_receive {^ref2, {:nack, %{"draining" => "sorry"}}}
 
     MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :ok, %{}, "ok"}}])
+    assert_receive {^ref1, {:ok, %{}, "ok"}}
 
+    assert_receive {:EXIT, ^srv, :normal}
+    assert_received {^srv, :terminate, :normal}
+    assert_receive {:EXIT, ^cli, :normal}
+    assert_received {^cli, :terminate, :normal}
+  end
+
+  test "client shutdowns on cast drain once last exchange responds", context do
+    %{client: cli, server: srv} = context
+    Process.flag(:trap_exit, true)
+    ref1 = Mux.ClientSession.dispatch(cli, %{}, "", %{}, "hello")
+    assert_receive {^srv, {:packet, tag}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
+
+    Mux.ClientSession.drain(cli)
+    assert_receive {^cli, :drain, nil}
+    send(cli, {self(), {:ok, self()}})
+
+    # client promised not to send more requests
+    ref2 = Mux.ClientSession.dispatch(cli, %{}, "", %{}, "nacked")
+    assert_receive {^cli, :nack, {%{}, "", %{}, "nacked"}}
+    send(cli, {self(), {:nack, %{"draining" => "sorry"}}})
+    assert_receive {^ref2, {:nack, %{"draining" => "sorry"}}}
+
+    MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :ok, %{}, "ok"}}])
     assert_receive {^ref1, {:ok, %{}, "ok"}}
 
     assert_receive {:EXIT, ^srv, :normal}

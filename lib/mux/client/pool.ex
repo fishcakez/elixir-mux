@@ -50,7 +50,7 @@ defmodule Mux.Client.Pool do
       :ok ->
         mon = Process.monitor(pid)
         send(pid, {:enter_loop, ref, sock})
-        mon
+        {pid, mon}
       {:error, _} = error ->
         _ = Supervisor.terminate_child(pool, pid)
         error

@@ -82,6 +82,10 @@ defmodule Mux.ClientSession do
     Mux.Connection.cast(client, {:cancel, ref, why})
   end
 
+  @spec drain(client) :: :ok
+  def drain(client),
+    do: Mux.Connection.cast(client, :drain)
+
   @spec enter_loop(module, :gen_tcp.socket, state, [option]) :: no_return
   def enter_loop(mod, sock, state, opts) do
     {cli_opts, opts} = Keyword.split(opts, [:handshake, :handshake_timeout])
@@ -114,6 +118,11 @@ defmodule Mux.ClientSession do
   def handle(:cast, {:cancel, ref, why}, state) do
     {_, cmds, state} = handle_cancel(ref, why, state)
     {cmds, state}
+  end
+  def handle(:cast, :drain, state) do
+    # act like received drain request but don't send back reply
+    {_, state} = handle_drain(0, state)
+    {[], state}
   end
   def handle({:call, from}, {:cancel, ref, why}, state) do
     case handle_cancel(ref, why, state) do

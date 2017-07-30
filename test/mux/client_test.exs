@@ -90,6 +90,34 @@ defmodule Mux.ClientTest do
       [{:normal, :normal}]
   end
 
+  test "client shuts down once last exchange responds", context do
+    %{clients: [cli], servers: [srv], dest: dest, supervisors: [sup]} = context
+    task1 = Task.async(Mux.Client, :sync_dispatch, [%{}, dest, %{}, "hello"])
+    assert_receive {^srv, {:packet, tag}, {:transmit_dispatch, %{}, ^dest, %{}, "hello"}}
+
+    # parent of supervisor and it traps so will exit normally
+    Process.exit(sup, :normal)
+
+    assert_receive {^cli, :drain, nil}
+    send(cli, {self(), {:ok, self()}})
+
+    # check socket still works
+    MuxProxy.commands(srv, [{:send, 1, :transmit_ping}])
+    assert_receive {^srv, {:packet, 1}, :receive_ping}
+
+    # client not going to send more requests
+    task2 = Task.async(Mux.Client, :sync_dispatch, [%{}, dest, %{}, "nacked"])
+    assert_receive {^cli, :nack, {%{}, ^dest, %{}, "nacked"}}
+    send(cli, {self(), {:nack, %{"draining" => "sorry"}}})
+    assert Task.await(task2) == {:nack, %{"draining" => "sorry"}}
+
+    MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :ok, %{}, "ok"}}])
+    assert Task.await(task1) == {:ok, %{}, "ok"}
+
+    assert_receive {^cli, :terminate, :normal}
+    assert_receive {^srv, :terminate, :normal}
+  end
+
   defp pairs(dest, opts) do
     case opts[:clients] do
       0 ->

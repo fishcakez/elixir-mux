@@ -11,23 +11,24 @@ defmodule Mux.Client.Manager do
     @moduledoc false
 
     @enforce_keys [:dest, :address, :port, :socket_opt, :timeout, :interval,
-                   :supervisor, :monitor]
+                   :supervisor, :monitor, :session]
     defstruct [:dest, :address, :port, :socket_opt, :timeout, :interval,
-               :supervisor, :monitor]
+               :supervisor, :monitor, :session]
   end
 
   @type address :: :inet.sock_address() | :inet.hostname()
   @type option ::
     {:socket_opt, [:gen_tcp.connect_option]} |
     {:connect_timeout, timeout} |
-    {:connect_interval, timeout}
+    {:connect_interval, timeout} |
+    {:grace, timeout}
 
   @spec child_spec({Mux.Packet.dest, address, :inet.port_number, option}) ::
     Supervisor.child_spec
   def child_spec({dest, addr, port, opts}) do
     %{id: {dest, __MODULE__},
       start: {__MODULE__, :start_link, [dest, addr, port, opts]},
-      type: :worker}
+      type: :worker, shutdown: Keyword.get(opts, :grace, 5_000)}
   end
 
   def start_link(dest, addr, port, opts) do
@@ -36,12 +37,13 @@ defmodule Mux.Client.Manager do
   end
 
   def init({dest, sup, addr, port, opts}) do
+    Process.flag(:trap_exit, true)
     sock_opt = Keyword.get(opts, :socket_opt, [])
     timeout = Keyword.get(opts, :connect_timeout, @connect_timeout)
     interval = Keyword.get(opts, :connect_interval, @connect_interval)
     data = %Data{dest: dest, address: addr, port: port, socket_opt: sock_opt,
                  timeout: timeout, interval: interval, supervisor: sup,
-                 monitor: nil}
+                 monitor: nil, session: nil}
     {:ok, :init, data, [{:next_event, :internal, :init}]}
   end
 
@@ -56,13 +58,14 @@ defmodule Mux.Client.Manager do
   end
 
   def open(:info, {:DOWN, mon, _, _, reason}, %Data{monitor: mon} = data) do
+    data = %Data{data | monitor: nil, session: nil}
     case reason do
       :normal ->
-        {:next_state, :closed, %Data{data | monitor: nil}, connect()}
+        {:next_state, :closed, data, connect()}
       {:tcp_error, _} ->
-        {:next_state, :closed, %Data{data | monitor: nil}, connect()}
+        {:next_state, :closed, data, connect()}
       reason ->
-        {:stop, {:shutdown, reason}}
+        {:stop, {:shutdown, reason}, data}
     end
   end
   def open(:info, msg, data),
@@ -74,8 +77,15 @@ defmodule Mux.Client.Manager do
   def closed(:info, msg, data),
     do: info(msg, data)
 
-  def terminate(_, _, _),
+  def terminate(_, _, %Data{monitor: nil}),
     do: :ok
+  def terminate(_, _, %Data{monitor: mon, session: pid}) do
+    Mux.ClientSession.drain(pid)
+    receive do
+      {:DOWN, ^mon, _, _, _} ->
+        :ok
+    end
+  end
 
   ## Helpers
 
@@ -93,8 +103,8 @@ defmodule Mux.Client.Manager do
           supervisor: sup, interval: interval} = data
     case :gen_tcp.connect(addr, port, @connect_options ++ opts, timeout) do
       {:ok, sock} ->
-        mon = Mux.Client.Pool.start_session(sup, sock)
-        {:next_state, :open, %Data{data | monitor: mon}}
+        {pid, mon} = Mux.Client.Pool.start_session(sup, sock)
+        {:next_state, :open, %Data{data | monitor: mon, session: pid}}
       {:error, _} ->
         backoff = rand_interval(interval)
         {:keep_state_and_data, [{:state_timeout, backoff, {:connect, backoff}}]}
