@@ -1,4 +1,4 @@
-defmodule Mux.Client do
+defmodule Mux.ClientSession do
   @moduledoc """
   Client loop for a Mux session.
 
@@ -293,7 +293,6 @@ defmodule Mux.Client do
         {pid, ref} = from
         mon = Process.monitor(pid)
         exchanges = Map.put(exchanges, tag, {from, mon})
-        mon = Process.monitor(pid)
         monitors = Map.put(monitors, mon, {tag, ref})
         refs = Map.put(refs, ref, {tag, mon})
         state = %State{state | tags: tags, exchanges: exchanges,

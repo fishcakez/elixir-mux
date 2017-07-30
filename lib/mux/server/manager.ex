@@ -24,7 +24,7 @@ defmodule Mux.Server.Manager do
   def acceptor_continue(_, sock, {module, dest, ref, arg, opts}) do
     Process.flag(:trap_exit, true)
     {man_opts, opts} = Keyword.split(opts, @options)
-    pid = spawn_worker(module, dest, ref, arg, opts)
+    pid = spawn_session(module, dest, ref, arg, opts)
     actions = [{:next_event, :internal, {:init, sock, man_opts}}]
     interval = Keyword.get(man_opts, :lease_interval, @lease_interval)
     data = %Data{session: pid, drain: ref, lease: make_ref(),
@@ -168,13 +168,14 @@ defmodule Mux.Server.Manager do
     |> Enum.into(MapSet.new())
   end
 
-  defp spawn_worker(module, dest, ref, arg, opts) do
+  defp spawn_session(module, dest, ref, arg, opts) do
     {spawn_opts, opts} = Keyword.split(opts, [:spawn_opt])
     spawn_args = [module, dest, ref, arg, opts]
-    :proc_lib.spawn_opt(__MODULE__, :init_worker, spawn_args, spawn_opts)
+    spawn_opts = [:link | spawn_opts]
+    :proc_lib.spawn_opt(__MODULE__, :init_session, spawn_args, spawn_opts)
   end
 
-  def init_worker(module, dest, ref, args, opts) do
+  def init_session(module, dest, ref, args, opts) do
     {:ok, _} = Registry.register(Mux.ServerSession, dest, module)
     receive do
       {:enter_loop, ^ref, sock} ->

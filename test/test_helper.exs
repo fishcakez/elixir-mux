@@ -33,7 +33,7 @@ defmodule MuxProxy do
 end
 
 defmodule MuxClientProxy do
-  @behaviour Mux.Client
+  @behaviour Mux.ClientSession
 
   defmodule Handshake do
     @behaviour Mux.ClientHandshake
@@ -65,7 +65,7 @@ defmodule MuxClientProxy do
   def init_it(parent, opts) do
     receive do
       {^parent, socket} ->
-        Mux.Client.enter_loop(__MODULE__, socket, parent, opts)
+        Mux.ClientSession.enter_loop(__MODULE__, socket, parent, opts)
     end
   end
 

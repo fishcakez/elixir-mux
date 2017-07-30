@@ -9,6 +9,9 @@ defmodule Mux.Application do
                 registry(Mux.Server.Pool, :unique),
                 registry(Mux.Server.Socket, :unique),
                 registry(Mux.ServerSession, :duplicate),
+                registry(Mux.Client, :duplicate),
+                registry(Mux.Client.Pool, :duplicate),
+                registry(Mux.ClientSession, :duplicate),
                 {Mux.Alarm.Supervisor, alarm_tab}]
     case Supervisor.start_link(children, [strategy: :one_for_one]) do
       {:ok, pid} ->
