@@ -39,7 +39,7 @@ defmodule Mux.Alarm do
   end
   def handle_event({:clear_alarm, id}, {table, registry} = state) do
     :ets.delete(table, id)
-    Registry.dispatch(registry, &notify(&1, :CLEAR, id), [parallel: false])
+    Registry.dispatch(registry, id, &notify(&1, :CLEAR, id), [parallel: false])
     {:ok, state}
   end
 
