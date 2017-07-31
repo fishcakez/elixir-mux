@@ -10,9 +10,9 @@ defmodule Mux.Packet do
   @transmit_request 1
   @receive_request -@transmit_request
 
-  @status_ok 1
-  @status_error 2
-  @status_nack 3
+  @status_ok 0
+  @status_error 1
+  @status_nack 2
 
   @transmit_dispatch 2
   @receive_dispatch -@transmit_dispatch
