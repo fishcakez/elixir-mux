@@ -16,11 +16,13 @@ defmodule Mux.SessionTest do
     body = "hello"
 
     Mux.Deadline.bind(100, fn ->
-      ctx = Mux.Context.get()
-      ref = Mux.ClientSession.dispatch(cli, dest, dest_tab, body)
-      assert_receive {task, :dispatch, {^ctx, ^dest, ^dest_tab, ^body}}
-      send(task, {self(), {:ok, "hi"}})
-      assert_receive {^ref, {:ok, "hi"}}
+      Mux.Trace.span([], fn ->
+        ctx = Mux.Context.get()
+        ref = Mux.ClientSession.dispatch(cli, dest, dest_tab, body)
+        assert_receive {task, :dispatch, {^ctx, ^dest, ^dest_tab, ^body}}
+        send(task, {self(), {:ok, "hi"}})
+        assert_receive {^ref, {:ok, "hi"}}
+      end)
     end)
   end
 

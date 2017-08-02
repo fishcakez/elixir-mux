@@ -18,7 +18,7 @@ defmodule Mux.ServerSession do
 
   @handshake_timeout 5_000
   @handshake_check "tinit check"
-  @wire_contexts [Mux.Deadline]
+  @wire_contexts [Mux.Deadline, Mux.Trace]
   @mux_version 1
   @session_size 32
   @frame_size 0xFFFF
