@@ -64,15 +64,13 @@ defmodule Mux.ClientTest do
     assert stop(context) == []
   end
 
-  test "dispatch honours deadline", %{dest: dest, servers: [srv]} = context do
+  test "dispatch nacks on expired deadline", context do
+    %{dest: dest, servers: [srv]} = context
     Mux.Deadline.bind(0, fn ->
-      assert {:timeout, _} = catch_exit(Mux.Client.sync_dispatch(dest, %{}, "hi"))
+      assert Mux.Client.sync_dispatch(dest, %{}, "hi") == :nack
     end)
-    assert_receive {^srv, {:packet, tag},
-      {:transmit_dispatch, %{"com.twitter.finagle.Deadline" => _}, ^dest, %{}, "hi"}}
-    assert_receive {^srv, {:packet, 0}, {:transmit_discarded, ^tag, _}}
-    MuxProxy.commands(srv, [{:send, tag, :receive_discarded}])
     assert stop(context) == [{:normal, :normal}]
+    refute_received {^srv, _, _}
   end
 
   @tag :reconnect

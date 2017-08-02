@@ -62,8 +62,14 @@ defmodule Mux.ClientSession do
     # call will use a middleman process that exits on timeout, so client will
     # monitor middleman (instead of caller) and discard when it exits on timeout
     context = Mux.Context.get()
-    request = {:dispatch, Mux.Context.to_wire(context), dest, tab, body}
-    Mux.Connection.call(client, request, timeout(context, timeout))
+    case timeout(context, timeout) do
+      0 when timeout !== 0 ->
+        # deadline expired!
+        :nack
+      deadline_timeout ->
+        request = {:dispatch, Mux.Context.to_wire(context), dest, tab, body}
+        Mux.Connection.call(client, request, deadline_timeout)
+    end
   end
 
   @spec dispatch(client, Mux.Packet.dest, Mux.Packet.dest_table,
