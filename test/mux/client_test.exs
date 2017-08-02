@@ -64,15 +64,6 @@ defmodule Mux.ClientTest do
     assert stop(context) == []
   end
 
-  test "dispatch nacks on expired deadline", context do
-    %{dest: dest, servers: [srv]} = context
-    Mux.Deadline.bind(0, fn ->
-      assert Mux.Client.sync_dispatch(dest, %{}, "hi") == :nack
-    end)
-    assert stop(context) == [{:normal, :normal}]
-    refute_received {^srv, _, _}
-  end
-
   @tag :reconnect
   @tag :capture_log
   test "client reconnects", context do

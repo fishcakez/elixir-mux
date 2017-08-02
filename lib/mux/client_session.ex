@@ -61,24 +61,16 @@ defmodule Mux.ClientSession do
   def sync_dispatch(client, dest, tab, body, timeout \\ 5_000) do
     # call will use a middleman process that exits on timeout, so client will
     # monitor middleman (instead of caller) and discard when it exits on timeout
-    context = Mux.Context.get()
-    case timeout(context, timeout) do
-      0 when timeout !== 0 ->
-        # deadline expired!
-        :nack
-      deadline_timeout ->
-        request = {:dispatch, Mux.Context.to_wire(context), dest, tab, body}
-        Mux.Connection.call(client, request, deadline_timeout)
-    end
+    request = {:dispatch, wire_context(), dest, tab, body}
+    Mux.Connection.call(client, request, timeout)
   end
 
   @spec dispatch(client, Mux.Packet.dest, Mux.Packet.dest_table,
         body :: binary) :: reference
   def dispatch(client, dest, tab, body) do
     ref = make_ref()
-    from = {self(), ref}
-    context = Mux.Context.to_wire()
-    Mux.Connection.cast(client, {:dispatch, from, context, dest, tab, body})
+    request = {:dispatch, {self(), ref}, wire_context(), dest, tab, body}
+    Mux.Connection.cast(client, request)
     ref
   end
 
@@ -175,13 +167,16 @@ defmodule Mux.ClientSession do
 
   ## Helpers
 
-  defp timeout(%{Mux.Deadline => deadline}, timeout) do
-    deadline
-    |> Mux.Deadline.timeout()
-    |> min(timeout)
+  defp wire_context() do
+    Mux.Context.get()
+    |> start_trace()
+    |> Mux.Context.to_wire()
   end
-  defp timeout(_, timeout),
-    do: timeout
+
+  defp start_trace(%{Mux.Trace => trace} = ctx),
+    do: %{ctx | Mux.Trace => Mux.Trace.start(trace)}
+  defp start_trace(ctx),
+    do: ctx
 
   # 0 tag is a one way
   defp handle_packet(0, {:transmit_lease, unit, timeout}, state),

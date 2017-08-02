@@ -18,7 +18,7 @@ defmodule Mux.ServerSession do
 
   @handshake_timeout 5_000
   @handshake_check "tinit check"
-  @wire_contexts [Mux.Deadline, Mux.Trace]
+  @wire_contexts [Mux.Trace]
   @mux_version 1
   @session_size 32
   @frame_size 0xFFFF
@@ -60,7 +60,7 @@ defmodule Mux.ServerSession do
   @spec enter_loop(module, :gen_tcp.socket, state, [option]) :: no_return
   def enter_loop(mod, sock, state, opts) do
     {srv_opts, opts} =
-      Keyword.split(opts, [:handshake, :handshake_timeout, :context])
+      Keyword.split(opts, [:handshake, :handshake_timeout, :wire_contexts])
     arg = {{mod, state}, srv_opts}
     Mux.Connection.enter_loop(__MODULE__, sock, arg, opts)
   end

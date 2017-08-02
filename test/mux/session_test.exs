@@ -5,7 +5,8 @@ defmodule Mux.SessionTest do
     debug = context[:debug] || [:log]
     session_opts = context[:session_opts] || []
     opts = [debug: debug, session_opts: session_opts,
-            headers: context[:headers]]
+            headers: context[:headers],
+            wire_contexts: [Mux.Deadline, Mux.Trace]]
     {cli, srv} = pair(opts)
     {:ok, [client: cli, server: srv]}
   end
@@ -16,10 +17,15 @@ defmodule Mux.SessionTest do
     body = "hello"
 
     Mux.Deadline.bind(100, fn ->
-      Mux.Trace.span([], fn ->
-        ctx = Mux.Context.get()
+      Mux.Trace.span([:debug, :sampling_known], fn ->
+        %{Mux.Deadline => deadline, Mux.Trace => parent} = Mux.Context.get()
         ref = Mux.ClientSession.dispatch(cli, dest, dest_tab, body)
-        assert_receive {task, :dispatch, {^ctx, ^dest, ^dest_tab, ^body}}
+        assert_receive {task, :dispatch, {ctx, ^dest, ^dest_tab, ^body}}
+        assert %{Mux.Deadline => ^deadline, Mux.Trace => child} = ctx
+        assert child.trace_id === parent.trace_id
+        assert child.parent_id === parent.span_id
+        assert child.span_id !== parent.span_id
+        assert Enum.sort(child.flags) === Enum.sort(parent.flags -- [:root])
         send(task, {self(), {:ok, "hi"}})
         assert_receive {^ref, {:ok, "hi"}}
       end)

@@ -5,7 +5,8 @@ defmodule Mux.ServerSessionTest do
     debug = context[:debug] || [:log]
     session_opts = context[:session_opts] || []
     opts = [debug: debug, session_opts: session_opts,
-            headers: context[:headers]]
+            headers: context[:headers],
+            wire_contexts: [Mux.Deadline]]
     {cli, srv} = pair(opts)
     {:ok, [client: cli, server: srv]}
   end

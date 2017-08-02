@@ -55,7 +55,6 @@ defmodule Mux.Trace do
     join(trace_id, trace_id, trace_id, [:root | flags])
   end
 
-
   @doc """
   Start a new child trace.
 
