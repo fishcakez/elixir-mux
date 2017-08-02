@@ -11,7 +11,7 @@ defmodule Mux.Server do
     Mux.ServerSession.option |
     {:max_restarts, non_neg_integer} |
     {:max_seconds, pos_integer} |
-    {:restart, :supervisor.restart} |
+    {:restart, Supervisor.restart} |
     {:grace, timeout} |
     {:spawn_opt, [:proc_lib.spawn_option]} |
     {:port, :inet.port_number} |

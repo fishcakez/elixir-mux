@@ -11,19 +11,21 @@ defmodule Mux.SessionTest do
   end
 
   test "client dispatch returns ok response", %{client: cli} do
-    ctx = %{"a" => "b"}
     dest = "server"
     dest_tab = %{"c" => "d"}
     body = "hello"
 
-    ref = Mux.ClientSession.dispatch(cli, ctx, dest, dest_tab, body)
-    assert_receive {task, :dispatch, {^ctx, ^dest, ^dest_tab, ^body}}
-    send(task, {self(), {:ok, %{"e" => "f"}, "hi"}})
-    assert_receive {^ref, {:ok, %{"e" => "f"}, "hi"}}
+    Mux.Deadline.bind(100, fn ->
+      ctx = Mux.Context.get()
+      ref = Mux.ClientSession.dispatch(cli, dest, dest_tab, body)
+      assert_receive {task, :dispatch, {^ctx, ^dest, ^dest_tab, ^body}}
+      send(task, {self(), {:ok, "hi"}})
+      assert_receive {^ref, {:ok, "hi"}}
+    end)
   end
 
   test "client cancel kills task", %{client: cli} do
-    ref = Mux.ClientSession.dispatch(cli, %{}, "", %{}, "hi")
+    ref = Mux.ClientSession.dispatch(cli, "", %{}, "hi")
     assert_receive {task, :dispatch, {%{}, "", %{}, "hi"}}
     mon = Process.monitor(task)
     assert Mux.ClientSession.cancel(cli, ref) == :ok
@@ -33,8 +35,8 @@ defmodule Mux.SessionTest do
   test "server drain causes close after tasks handled", context do
     %{client: cli, server: srv} = context
 
-    ref1 = Mux.ClientSession.dispatch(cli, %{}, "dest", %{}, "1")
-    ref2 = Mux.ClientSession.dispatch(cli, %{}, "dest", %{}, "2")
+    ref1 = Mux.ClientSession.dispatch(cli, "dest", %{}, "1")
+    ref2 = Mux.ClientSession.dispatch(cli, "dest", %{}, "2")
     assert_receive {task1, :dispatch, {%{}, "dest", %{}, "1"}}
     assert_receive {task2, :dispatch, {%{}, "dest", %{}, "2"}}
 
@@ -43,17 +45,15 @@ defmodule Mux.SessionTest do
     send(cli, {self(), {:ok, self()}})
 
     # send first after drain to ensure receive_drain arrives before response
-    send(task1, {self(), {:ok, %{}, "one"}})
+    send(task1, {self(), {:ok, "one"}})
     # draining must have commenced once this is received
-    assert_receive {^ref1, {:ok, %{}, "one"}}
+    assert_receive {^ref1, {:ok, "one"}}
     # client nacks all new requests
-    ref3 = Mux.ClientSession.dispatch(cli, %{}, "", %{}, "drain")
-    assert_receive {^cli, :nack, {%{}, "", %{}, "drain"}}
-    send(cli, {self(), {:nack, %{"draining" => "sorry"}}})
-    assert_receive {^ref3, {:nack, %{"draining" => "sorry"}}}
+    ref3 = Mux.ClientSession.dispatch(cli, "", %{}, "drain")
+    assert_receive {^ref3, :nack}
 
-    send(task2, {self(), {:ok, %{}, "two"}})
-    assert_receive {^ref2, {:ok, %{}, "two"}}
+    send(task2, {self(), {:ok, "two"}})
+    assert_receive {^ref2, {:ok, "two"}}
 
     assert_receive {^cli, :terminate, :normal}
     assert_receive {^srv, :terminate, :normal}
@@ -68,28 +68,24 @@ defmodule Mux.SessionTest do
 
     :timer.sleep(20)
 
-    ref1 = Mux.ClientSession.dispatch(cli, %{}, "dest", %{}, "1")
-    assert_receive {task1, :nack, {%{}, "dest", %{}, "1"}}
-    send(task1, {self(), {:nack, %{"no lease" => "sorry"}}})
-    assert_receive {^ref1, {:nack, %{"no lease" => "sorry"}}}
+    ref1 = Mux.ClientSession.dispatch(cli, "dest", %{}, "1")
+    assert_receive {^ref1, :nack}
 
     Mux.ServerSession.lease(srv, :second, 1)
     assert_receive {^cli, :lease, {:millisecond, 1000}}
     send(cli, {self(), {:ok, self()}})
 
-    ref2 = Mux.ClientSession.dispatch(cli, %{}, "dest", %{}, "2")
+    ref2 = Mux.ClientSession.dispatch(cli, "dest", %{}, "2")
     assert_receive {task2, :dispatch, {%{}, "dest", %{}, "2"}}
-    send(task2, {self(), {:ok, %{}, "lease"}})
-    assert_receive {^ref2, {:ok, %{}, "lease"}}
+    send(task2, {self(), {:ok, "lease"}})
+    assert_receive {^ref2, {:ok, "lease"}}
 
     Mux.ServerSession.lease(srv, :millisecond, 0)
     assert_receive {^cli, :lease, {:millisecond, 0}}
     send(cli, {self(), {:ok, self()}})
 
-    ref3 = Mux.ClientSession.dispatch(cli, %{}, "dest", %{}, "3")
-    assert_receive {task3, :nack, {%{}, "dest", %{}, "3"}}
-    send(task3, {self(), {:nack, %{"no lease" => "not sorry"}}})
-    assert_receive {^ref3, {:nack, %{"no lease" => "not sorry"}}}
+    ref3 = Mux.ClientSession.dispatch(cli, "dest", %{}, "3")
+    assert_receive {^ref3, :nack}
   end
 
   ## Helpers

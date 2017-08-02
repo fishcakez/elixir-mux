@@ -16,33 +16,34 @@ defmodule Mux.ServerSessionTest do
   end
 
   test "server dispatch returns ok response", %{client: cli} do
-    ctx = %{"a" => "b"}
+    ctx = %{Mux.Deadline => Mux.Deadline.new(100)}
+    wire = Mux.Context.to_wire(ctx)
     dest = "server"
     dest_tab = %{"c" => "d"}
     body = "hello"
 
-    MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, ctx, dest, dest_tab, body}}])
+    MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, wire, dest, dest_tab, body}}])
 
     assert_receive {task, :dispatch, {^ctx, ^dest, ^dest_tab, ^body}}
 
-    send(task, {self(), {:ok, %{"e" => "f"}, "hi"}})
+    send(task, {self(), {:ok, "hi"}})
 
     assert_receive {^cli, {:packet, 1},
-      {:receive_dispatch, :ok, %{"e" => "f"}, "hi"}}
+      {:receive_dispatch, :ok, %{}, "hi"}}
   end
 
   test "server dispatch returns nack response", %{client: cli} do
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "hi"}}])
     assert_receive {task, :dispatch, {%{}, "", %{}, "hi"}}
-    send(task, {self(), {:nack, %{"a" => "b"}}})
+    send(task, {self(), :nack})
     assert_receive {^cli, {:packet, 1},
-      {:receive_dispatch, :nack, %{"a" => "b"}, ""}}
+      {:receive_dispatch, :nack, %{}, ""}}
   end
 
   test "server dispatch returns app error response", %{client: cli} do
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "hi"}}])
     assert_receive {task, :dispatch, {%{}, "", %{}, "hi"}}
-    send(task, {self(), {:error, %{}, Mux.ApplicationError.exception("oops")}})
+    send(task, {self(), {:error, Mux.ApplicationError.exception("oops")}})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :error, %{}, "oops"}}
   end
@@ -86,7 +87,7 @@ defmodule Mux.ServerSessionTest do
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "hi"}}])
     assert_receive {task, :dispatch, {%{}, "", %{}, "hi"}}
 
-    send(task, {self(), {:nack, %{}}})
+    send(task, {self(), :nack})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :nack, %{}, ""}}
 
@@ -98,13 +99,13 @@ defmodule Mux.ServerSessionTest do
   test "server handles client reusing tag", %{client: cli} do
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "hi"}}])
     assert_receive {task1, :dispatch, {%{}, "", %{}, "hi"}}
-    send(task1, {self(), {:nack, %{}}})
+    send(task1, {self(), :nack})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :nack, %{}, ""}}
 
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "hi again"}}])
     assert_receive {task2, :dispatch, {%{}, "", %{}, "hi again"}}
-    send(task2, {self(), {:ok, %{}, "success"}})
+    send(task2, {self(), {:ok, "success"}})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :ok, %{}, "success"}}
   end
@@ -115,12 +116,12 @@ defmodule Mux.ServerSessionTest do
                             {:send, 1, {:transmit_dispatch, %{}, "", %{}, "2"}}])
 
     assert_receive {task2, :dispatch, {%{}, "", %{}, "2"}}
-    send(task2, {self(), {:nack, %{}}})
+    send(task2, {self(), :nack})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :nack, %{}, ""}}
 
     assert_receive {task1, :dispatch, {%{}, "", %{}, "1"}}
-    send(task1, {self(), {:nack, %{}}})
+    send(task1, {self(), :nack})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :nack, %{}, ""}}
 
@@ -134,12 +135,12 @@ defmodule Mux.ServerSessionTest do
                             {:send, 1, {:transmit_dispatch, %{}, "", %{}, "2"}}])
 
     assert_receive {task1, :dispatch, {%{}, "", %{}, "1"}}
-    send(task1, {self(), {:nack, %{}}})
+    send(task1, {self(), :nack})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :nack, %{}, ""}}
 
     assert_receive {task2, :dispatch, {%{}, "", %{}, "2"}}
-    send(task2, {self(), {:nack, %{}}})
+    send(task2, {self(), :nack})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :nack, %{}, ""}}
 
@@ -160,7 +161,7 @@ defmodule Mux.ServerSessionTest do
     assert_receive {^cli, {:packet, 1}, :receive_discarded}
     refute Process.alive?(task1)
 
-    send(task2, {self(), {:nack, %{}}})
+    send(task2, {self(), :nack})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :nack, %{}, ""}}
 
@@ -185,25 +186,23 @@ defmodule Mux.ServerSessionTest do
 
   @tag session_opts: [session_size: 1]
   test "server nacks on max active tasks and allows once below", context do
-    %{client: cli, server: srv} = context
+    %{client: cli} = context
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "1"}},
                             {:send, 2, {:transmit_dispatch, %{}, "", %{}, "2"}}])
 
     assert_receive {task1, :dispatch, {%{}, "", %{}, "1"}}
 
-    assert_receive {^srv, :nack, {%{}, "", %{}, "2"}}
-    send(srv, {self(), {:nack, %{"busy" => "sorry"}}})
     assert_receive {^cli, {:packet, 2},
-      {:receive_dispatch, :nack, %{"busy" => "sorry"}, ""}}
+      {:receive_dispatch, :nack, %{}, ""}}
 
-    send(task1, {self(), {:ok, %{}, "hi"}})
+    send(task1, {self(), {:ok, "hi"}})
     assert_receive {^cli, {:packet, 1},
       {:receive_dispatch, :ok, %{}, "hi"}}
 
     MuxProxy.commands(cli, [{:send, 3, {:transmit_dispatch, %{}, "", %{}, "3"}}])
 
     assert_receive {task3, :dispatch, {%{}, "", %{}, "3"}}
-    send(task3, {self(), {:ok, %{}, "hello"}})
+    send(task3, {self(), {:ok, "hello"}})
     assert_receive {^cli, {:packet, 3},
       {:receive_dispatch, :ok, %{}, "hello"}}
   end
@@ -267,12 +266,10 @@ defmodule Mux.ServerSessionTest do
   end
 
   @tag :headers
-  test "server nacks before handshake", %{client: cli, server: srv} do
+  test "server nacks before handshake", %{client: cli} do
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "hello", %{}, "world"}}])
-    assert_receive {^srv, :nack, {%{}, "hello", %{}, "world"}}
-    send(srv, {self(), {:nack, %{"busy" => "sorry"}}})
     assert_receive {^cli, {:packet, 1},
-      {:receive_dispatch, :nack, %{"busy" => "sorry"}, ""}}
+      {:receive_dispatch, :nack, %{}, ""}}
   end
 
   @tag :capture_log

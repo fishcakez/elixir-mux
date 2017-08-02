@@ -19,13 +19,12 @@ defmodule Mux.Client do
 
   @manager_options [:socket_opt, :connect_timeout, :connect_interval, :grace]
 
-  @spec sync_dispatch(Mux.Packet.context, Mux.Packet.dest,
-        Mux.Packet.dest_table, body :: binary, timeout) ::
-    Mux.ClientSession.result
-  def sync_dispatch(context, dest, tab, body, timeout \\ 5_000) do
+  @spec sync_dispatch(Mux.Packet.dest, Mux.Packet.dest_table, body :: binary,
+        timeout) :: Mux.ClientSession.result
+  def sync_dispatch(dest, tab, body, timeout \\ 5_000) do
     # should use dest table to alter destination
     name = {:via, Mux.Client.Dispatcher, dest}
-    Mux.ClientSession.sync_dispatch(name, context, dest, tab, body, timeout)
+    Mux.ClientSession.sync_dispatch(name, dest, tab, body, timeout)
   end
 
   @spec whereis(Mux.Packet.dest, Mux.Packet.dest_table) :: pid | nil

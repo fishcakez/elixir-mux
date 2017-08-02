@@ -11,13 +11,14 @@ defmodule Mux.ServerSession do
   defmodule State do
     @moduledoc false
     @enforce_keys [:exchanges, :tasks, :session_size, :handler, :handshake,
-                   :ref, :drain, :lease, :timer]
-    defstruct [:exchanges, :tasks, :session_size, :handler, :handshake, :ref,
-               :drain, :lease, :timer]
+                   :contexts, :ref, :drain, :lease, :timer]
+    defstruct [:exchanges, :tasks, :session_size, :handler, :handshake,
+               :contexts, :ref, :drain, :lease, :timer]
   end
 
   @handshake_timeout 5_000
   @handshake_check "tinit check"
+  @wire_contexts [Mux.Deadline]
   @mux_version 1
   @session_size 32
   @frame_size 0xFFFF
@@ -31,22 +32,20 @@ defmodule Mux.ServerSession do
   @type option ::
     Mux.Connection.option |
     {:handshake, {module, any}} |
-    {:handshake_timeout, timeout}
+    {:handshake_timeout, timeout} |
+    {:wire_contexts, [module]}
 
   @type result ::
-    {:ok, Mux.Packet.context, body :: binary} |
-    {:error, Mux.Packet.context, %Mux.ApplicationError{}} |
-    {:nack, Mux.Packet.context} |
+    {:ok, body :: binary} |
+    {:error, %Mux.ApplicationError{}} |
+    :nack |
     {:error, %Mux.ServerError{}}
 
   @callback init(state) ::
     {:ok, state}
 
-  @callback dispatch(Mux.Packet.context, Mux.Packet.dest, Mux.Packet.dest_table,
+  @callback dispatch(Mux.Packet.dest, Mux.Packet.dest_table,
             body :: binary, state) :: result
-
-  @callback nack(Mux.Packet.context, Mux.Packet.dest, Mux.Packet.dest_table,
-            body :: binary, state) :: {:nack, Mux.Packet.context}
 
   @callback terminate(reason :: any, state) :: any
 
@@ -60,7 +59,8 @@ defmodule Mux.ServerSession do
 
   @spec enter_loop(module, :gen_tcp.socket, state, [option]) :: no_return
   def enter_loop(mod, sock, state, opts) do
-    {srv_opts, opts} = Keyword.split(opts, [:handshake, :handshake_timeout])
+    {srv_opts, opts} =
+      Keyword.split(opts, [:handshake, :handshake_timeout, :context])
     arg = {{mod, state}, srv_opts}
     Mux.Connection.enter_loop(__MODULE__, sock, arg, opts)
   end
@@ -72,11 +72,13 @@ defmodule Mux.ServerSession do
     handshake = Keyword.get_lazy(opts, :handshake, default)
     timeout = Keyword.get(opts, :handshake_timeout, @handshake_timeout)
     {handler, handshake} = pair_init(handler, handshake)
+    contexts = Keyword.get(opts, :wire_contexts, @wire_contexts)
     # session_size is 0 until handshake succeeds, lease is assumed to be held
     # for infinity until told otherwise.
     state = %State{exchanges: %{}, tasks: %{}, session_size: 0, ref: make_ref(),
-                   handler: handler, handshake: handshake, drain: false,
-                   lease: make_ref(), timer: {:handshake, start_timer(timeout)}}
+                   handler: handler, handshake: handshake, contexts: contexts,
+                   drain: false, lease: make_ref(),
+                   timer: {:handshake, start_timer(timeout)}}
     {[], state}
   end
 
@@ -188,38 +190,43 @@ defmodule Mux.ServerSession do
     end
   end
 
-  defp handle_dispatch(tag, context, dest, dest_table, body, state) do
+  defp handle_dispatch(tag, wire_context, dest, table, body, state) do
     %State{exchanges: exchanges, tasks: tasks, session_size: session_size,
-           lease: lease, handler: handler, ref: ref} = state
+           lease: lease, handler: handler, contexts: ctxs, ref: ref} = state
     if map_size(tasks) < session_size and lease do
-      {:ok, pid} = start_task(handler, ref, context, dest, dest_table, body)
+      context = {wire_context, ctxs}
+      {:ok, pid} = start_task(handler, ref, context, dest, table, body)
       # if client sent duplicate tag don't track this one, client must dedup but
       # server won't be able to handle a future transmit_discarded
       exchanges = Map.put_new(exchanges, tag, pid)
       tasks = Map.put(tasks, pid, tag)
       {[], %State{state | exchanges: exchanges, tasks: tasks}}
     else
-      {:nack, context} = handler_nack(context, dest, dest_table, body, handler)
-      {[receive_dispatch_nack(tag, context)], state}
+      {[receive_dispatch_nack(tag, %{})], state}
     end
   end
 
   defp start_task({mod, state}, ref, context, dest, dest_table, body) do
-    args = [context, dest, dest_table, body, state]
-    Task.start_link(__MODULE__, :dispatch, [ref, mod, :dispatch, args])
+    args = [dest, dest_table, body, state]
+    Task.start_link(__MODULE__, :dispatch, [ref, context, mod, :dispatch, args])
   end
 
   @doc false
-  def dispatch(ref, mod, fun, args) do
+  def dispatch(ref, {wire, mods}, mod, fun, args) do
+    res = Mux.Context.bind_wire(wire, mods, fn -> dispatch(mod, fun, args) end)
+    dispatch_result(ref, res)
+  end
+
+  defp dispatch(mod, fun, args) do
     case apply(mod, fun, args) do
-      {:ok, _context, _body} = ok ->
-        dispatch_result(ref, ok)
-      {:error, _context, %Mux.ApplicationError{}} = error ->
-        dispatch_result(ref, error)
+      {:ok, _body} = ok ->
+        ok
+      {:error, %Mux.ApplicationError{}} = error->
+        error
       {:error, %Mux.ServerError{}} = error ->
-        dispatch_result(ref, error)
-      {:nack, _context} = nack ->
-        dispatch_result(ref, nack)
+        error
+      :nack ->
+        :nack
     end
   end
 
@@ -265,15 +272,16 @@ defmodule Mux.ServerSession do
   end
 
   defp handle_result(tag, result, state) do
+    # no support for sending context upstream
     case result do
-      {:ok, context, body} ->
-        {[receive_dispatch_ok(tag, context, body)], state}
-      {:error, context, %Mux.ApplicationError{message: msg}} ->
-        {[receive_dispatch_error(tag, context, msg)], state}
+      {:ok, body} ->
+        {[receive_dispatch_ok(tag, %{}, body)], state}
+      {:error, %Mux.ApplicationError{message: msg}} ->
+        {[receive_dispatch_error(tag, %{}, msg)], state}
       {:error, %Mux.ServerError{message: msg}} ->
         {[receive_error(tag, msg)], state}
-      {:nack, context} ->
-        {[receive_dispatch_nack(tag, context)], state}
+      :nack ->
+        {[receive_dispatch_nack(tag, %{})], state}
     end
   end
 
@@ -327,9 +335,6 @@ defmodule Mux.ServerSession do
         {:error, err, {mod, state}}
     end
   end
-
-  defp handler_nack(context, dest, dest_table, body, {mod, state}),
-    do: apply(mod, :nack, [context, dest, dest_table, body, state])
 
   defp pair_terminate(reason, {mod1, state1}, {mod2, state2}) do
     # reverse order of pair_init/2

@@ -38,15 +38,17 @@ defmodule Mux.ClientSession do
     {:ping_interval, timeout}
 
   @type result ::
-    {:ok, Mux.Packet.context, body :: binary} |
-    {:error, Mux.Packet.context, %Mux.ApplicationError{}} |
-    {:nack, Mux.Packet.context} |
+    {:ok, body :: binary} |
+    {:error, %Mux.ApplicationError{}} |
+    :nack |
     {:error, %Mux.ServerError{}}
 
-  @callback init(state) :: {:ok, state}
+  @type sync_timeout ::
+    timeout |
+    {:clean_timeout, timeout} |
+    {:dirty_timeout, timeout}
 
-  @callback nack(Mux.Packet.context, Mux.Packet.dest, Mux.Packet.dest_table,
-            body :: binary, state) :: {:nack, Mux.Packet.context}
+  @callback init(state) :: {:ok, state}
 
   @callback lease(System.time_unit, timeout, state) :: {:ok, state}
 
@@ -54,19 +56,22 @@ defmodule Mux.ClientSession do
 
   @callback terminate(reason :: any, state) :: any
 
-  @spec sync_dispatch(client, Mux.Packet.context, Mux.Packet.dest,
-        Mux.Packet.dest_table, body :: binary, timeout) :: result
-  def sync_dispatch(client, context, dest, tab, body, timeout \\ 5_000) do
+  @spec sync_dispatch(client, Mux.Packet.dest, Mux.Packet.dest_table,
+        body :: binary, sync_timeout) :: result
+  def sync_dispatch(client, dest, tab, body, timeout \\ 5_000) do
     # call will use a middleman process that exits on timeout, so client will
     # monitor middleman (instead of caller) and discard when it exits on timeout
-    Mux.Connection.call(client, {:dispatch, context, dest, tab, body}, timeout)
+    context = Mux.Context.get()
+    request = {:dispatch, Mux.Context.to_wire(context), dest, tab, body}
+    Mux.Connection.call(client, request, timeout(context, timeout))
   end
 
-  @spec dispatch(client, Mux.Packet.context, Mux.Packet.dest,
-        Mux.Packet.dest_table, body :: binary) :: reference
-  def dispatch(client, context, dest, tab, body) do
+  @spec dispatch(client, Mux.Packet.dest, Mux.Packet.dest_table,
+        body :: binary) :: reference
+  def dispatch(client, dest, tab, body) do
     ref = make_ref()
     from = {self(), ref}
+    context = Mux.Context.to_wire()
     Mux.Connection.cast(client, {:dispatch, from, context, dest, tab, body})
     ref
   end
@@ -162,6 +167,16 @@ defmodule Mux.ClientSession do
   def terminate(reason, %State{handler: handler, handshake: handshake}),
     do: pair_terminate(reason, handler, handshake)
 
+  ## Helpers
+
+  defp timeout(%{Mux.Deadline => deadline}, timeout) do
+    deadline
+    |> Mux.Deadline.timeout()
+    |> min(timeout)
+  end
+  defp timeout(_, timeout),
+    do: timeout
+
   # 0 tag is a one way
   defp handle_packet(0, {:transmit_lease, unit, timeout}, state),
     do: handle_lease(unit, timeout, state)
@@ -230,11 +245,12 @@ defmodule Mux.ClientSession do
     end
   end
 
-  defp reply(from, :ok, context, body),
-    do: {:reply, from, {:ok, context, body}}
+  # context from downstream is ignore
+  defp reply(from, :ok, _context, body),
+    do: {:reply, from, {:ok, body}}
 
-  defp reply(from, :error, context, why),
-    do: {:reply, from, {:error, context, Mux.ApplicationError.exception(why)}}
+  defp reply(from, :error, _context, why),
+    do: {:reply, from, {:error, Mux.ApplicationError.exception(why)}}
 
   defp reply(from, :nack, context, _body),
     do: reply_nack(from, context)
@@ -242,8 +258,8 @@ defmodule Mux.ClientSession do
   defp reply_error(from, err),
     do: {:reply, from, {:error, err}}
 
-  defp reply_nack(from, context),
-    do: {:reply, from, {:nack, context}}
+  defp reply_nack(from, _context),
+    do: {:reply, from, :nack}
 
   defp receive_pop(tag, state) do
     %State{tags: tags, exchanges: exchanges, monitors: monitors,
@@ -293,11 +309,10 @@ defmodule Mux.ClientSession do
 
   defp handle_dispatch(from, context, dest, tab, body, state) do
     %State{tags: tags, exchanges: exchanges, monitors: monitors,
-           refs: refs, handler: handler} = state
+           refs: refs} = state
     case tags_pop(tags) do
       {nil, _} ->
-        {:nack, context} = handler_nack(context, dest, tab, body, handler)
-        {[reply_nack(from, context)], state}
+        {[reply_nack(from, %{})], state}
       {tag, tags} ->
         {pid, ref} = from
         mon = Process.monitor(pid)
@@ -384,9 +399,6 @@ defmodule Mux.ClientSession do
     {:ok, opts, state} = apply(mod, :handshake, [headers, state])
     {opts, {mod, state}}
   end
-
-  defp handler_nack(context, dest, dest_table, body, {mod, state}),
-    do: apply(mod, :nack, [context, dest, dest_table, body, state])
 
   defp handler_lease(unit, timeout, {mod, state}) do
     {:ok, state} = apply(mod, :lease, [unit, timeout, state])

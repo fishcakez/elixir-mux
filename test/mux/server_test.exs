@@ -32,7 +32,7 @@ defmodule Mux.ServerTest do
     %{client: cli} = context
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "hi", %{}, "world"}}])
     assert_receive {task, :dispatch, {%{}, "hi", %{}, "world"}}
-    send(task, {self(), {:ok, %{}, "hello"}})
+    send(task, {self(), {:ok, "hello"}})
     assert_receive {^cli, {:packet, _}, {:receive_dispatch, :ok, %{}, "hello"}}
     assert stop(context) == {:normal, :normal}
   end
@@ -92,7 +92,7 @@ defmodule Mux.ServerTest do
   @tag lease_interval: 10
   @tag :capture_log
   test "server stops leasing when alarm set and leases on clear", context do
-    %{client: cli, server: srv, lease_id: alarm_id} = context
+    %{client: cli, lease_id: alarm_id} = context
     assert_receive {^cli, {:packet, 0}, {:transmit_lease, :millisecond, lease}}
     assert lease >= 5
     assert lease <= 15
@@ -103,8 +103,6 @@ defmodule Mux.ServerTest do
 
     # no longer have a lease, dispatches nack
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "hi", %{}, "world"}}])
-    assert_receive {^srv, :nack, {%{}, "hi", %{}, "world"}}
-    send(srv, {self(), {:nack, %{}}})
     assert_receive {^cli, {:packet, _}, {:receive_dispatch, :nack, %{}, ""}}
 
     :alarm_handler.clear_alarm(alarm_id)
@@ -116,7 +114,7 @@ defmodule Mux.ServerTest do
     # got a lease again, dispatches succeed
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "hi", %{}, "world"}}])
     assert_receive {task, :dispatch, {%{}, "hi", %{}, "world"}}
-    send(task, {self(), {:ok, %{}, "hello"}})
+    send(task, {self(), {:ok, "hello"}})
     assert_receive {^cli, {:packet, _}, {:receive_dispatch, :ok, %{}, "hello"}}
 
     assert stop(context) == {:normal, :normal}

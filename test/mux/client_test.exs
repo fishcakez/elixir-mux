@@ -42,13 +42,13 @@ defmodule Mux.ClientTest do
 
   test "client handles dispatch", context do
     %{servers: [srv], dest: dest} = context
-    task = Task.async(Mux.Client, :sync_dispatch, [%{}, dest, %{"a" => "b"}, "hello"])
+    task = Task.async(Mux.Client, :sync_dispatch, [dest, %{"a" => "b"}, "hello"])
     assert_receive {^srv, {:packet, tag},
       {:transmit_dispatch, %{}, ^dest, %{"a" => "b"}, "hello"}}
     ctx = %{"hi" => "world"}
     body = "success!"
     MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :ok, ctx, body}}])
-    assert Task.await(task) == {:ok, ctx, body}
+    assert Task.await(task) == {:ok, body}
     assert stop(context) == [{:normal, :normal}]
   end
 
@@ -60,9 +60,19 @@ defmodule Mux.ClientTest do
 
   @tag clients: 0
   test "dispatch exits with noproc if no clients", %{dest: dest} = context do
-    assert {:noproc, _} =
-      catch_exit(Mux.Client.sync_dispatch(%{}, dest, %{}, "hi"))
+    assert {:noproc, _} = catch_exit(Mux.Client.sync_dispatch(dest, %{}, "hi"))
     assert stop(context) == []
+  end
+
+  test "dispatch honours deadline", %{dest: dest, servers: [srv]} = context do
+    Mux.Deadline.bind(0, fn ->
+      assert {:timeout, _} = catch_exit(Mux.Client.sync_dispatch(dest, %{}, "hi"))
+    end)
+    assert_receive {^srv, {:packet, tag},
+      {:transmit_dispatch, %{"com.twitter.finagle.Deadline" => _}, ^dest, %{}, "hi"}}
+    assert_receive {^srv, {:packet, 0}, {:transmit_discarded, ^tag, _}}
+    MuxProxy.commands(srv, [{:send, tag, :receive_discarded}])
+    assert stop(context) == [{:normal, :normal}]
   end
 
   @tag :reconnect
@@ -92,7 +102,7 @@ defmodule Mux.ClientTest do
 
   test "client shuts down once last exchange responds", context do
     %{clients: [cli], servers: [srv], dest: dest, supervisors: [sup]} = context
-    task1 = Task.async(Mux.Client, :sync_dispatch, [%{}, dest, %{}, "hello"])
+    task1 = Task.async(Mux.Client, :sync_dispatch, [dest, %{}, "hello"])
     assert_receive {^srv, {:packet, tag}, {:transmit_dispatch, %{}, ^dest, %{}, "hello"}}
 
     # parent of supervisor and it traps so will exit normally
@@ -106,13 +116,11 @@ defmodule Mux.ClientTest do
     assert_receive {^srv, {:packet, 1}, :receive_ping}
 
     # client not going to send more requests
-    task2 = Task.async(Mux.Client, :sync_dispatch, [%{}, dest, %{}, "nacked"])
-    assert_receive {^cli, :nack, {%{}, ^dest, %{}, "nacked"}}
-    send(cli, {self(), {:nack, %{"draining" => "sorry"}}})
-    assert Task.await(task2) == {:nack, %{"draining" => "sorry"}}
+    task2 = Task.async(Mux.Client, :sync_dispatch, [dest, %{}, "nacked"])
+    assert Task.await(task2) == :nack
 
     MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :ok, %{}, "ok"}}])
-    assert Task.await(task1) == {:ok, %{}, "ok"}
+    assert Task.await(task1) == {:ok, "ok"}
 
     assert_receive {^cli, :terminate, :normal}
     assert_receive {^srv, :terminate, :normal}

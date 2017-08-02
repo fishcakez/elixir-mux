@@ -16,7 +16,7 @@ defmodule Mux.ClientSessionTest do
   end
 
   test "client dispatch returns ok response", %{client: cli, server: srv} do
-    task = Task.async(Mux.ClientSession, :sync_dispatch, [cli, %{}, "", %{}, "hello"])
+    task = Task.async(Mux.ClientSession, :sync_dispatch, [cli, "", %{}, "hello"])
 
     assert_receive {^srv, {:packet, tag},
       {:transmit_dispatch, %{}, "", %{}, "hello"}}
@@ -25,11 +25,11 @@ defmodule Mux.ClientSessionTest do
     body = "hello"
     MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :ok, ctx, body}}])
 
-    assert Task.await(task) == {:ok, ctx, body}
+    assert Task.await(task) == {:ok, body}
   end
 
   test "client dispatch returns app error", %{client: cli, server: srv} do
-    task = Task.async(Mux.ClientSession, :sync_dispatch, [cli, %{}, "", %{}, "hello"])
+    task = Task.async(Mux.ClientSession, :sync_dispatch, [cli, "", %{}, "hello"])
 
     assert_receive {^srv, {:packet, tag},
       {:transmit_dispatch, %{}, "", %{}, "hello"}}
@@ -37,11 +37,11 @@ defmodule Mux.ClientSessionTest do
     msg = "bad!"
     MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :error, %{}, msg}}])
 
-    assert Task.await(task) == {:error, %{}, %Mux.ApplicationError{message: msg}}
+    assert Task.await(task) == {:error, %Mux.ApplicationError{message: msg}}
   end
 
   test "client dispatch returns server error", %{client: cli, server: srv} do
-    task = Task.async(Mux.ClientSession, :sync_dispatch, [cli, %{}, "", %{}, "hello"])
+    task = Task.async(Mux.ClientSession, :sync_dispatch, [cli, "", %{}, "hello"])
 
     assert_receive {^srv, {:packet, tag},
       {:transmit_dispatch, %{}, "", %{}, "hello"}}
@@ -54,7 +54,7 @@ defmodule Mux.ClientSessionTest do
 
   test "client returns error on unexpected discarded", context do
     %{client: cli, server: srv} = context
-    task = Task.async(Mux.ClientSession, :sync_dispatch, [cli, %{}, "", %{}, "hello"])
+    task = Task.async(Mux.ClientSession, :sync_dispatch, [cli, "", %{}, "hello"])
 
     assert_receive {^srv, {:packet, tag},
       {:transmit_dispatch, %{}, "", %{}, "hello"}}
@@ -65,18 +65,18 @@ defmodule Mux.ClientSessionTest do
   end
 
   test "client dispatch returns nack response", %{client: cli, server: srv} do
-    task = Task.async(Mux.ClientSession, :sync_dispatch, [cli, %{}, "", %{}, "hello"])
+    task = Task.async(Mux.ClientSession, :sync_dispatch, [cli, "", %{}, "hello"])
 
     assert_receive {^srv, {:packet, tag},
       {:transmit_dispatch, %{}, "", %{}, "hello"}}
 
     MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :nack, %{}, ""}}])
 
-    assert Task.await(task) == {:nack, %{}}
+    assert Task.await(task) == :nack
   end
 
   test "client cancels on dispatch timeout", %{client: cli, server: srv} do
-    catch_exit(Mux.ClientSession.sync_dispatch(cli, %{}, "", %{}, "hello", 1))
+    catch_exit(Mux.ClientSession.sync_dispatch(cli, "", %{}, "hello", 1))
 
     assert_receive {^srv, {:packet, tag}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
 
@@ -85,7 +85,7 @@ defmodule Mux.ClientSessionTest do
   end
 
   test "client cancels and ignores ok result", %{client: cli, server: srv} do
-    ref = Mux.ClientSession.dispatch(cli, %{}, "", %{}, "hello")
+    ref = Mux.ClientSession.dispatch(cli, "", %{}, "hello")
     assert_receive {^srv, {:packet, tag}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
     assert Mux.ClientSession.cancel(cli, ref, "test cancels") == :ok
     assert_receive {^srv, {:packet, 0},
@@ -100,7 +100,7 @@ defmodule Mux.ClientSessionTest do
   end
 
   test "client cancels and ignores nack", %{client: cli, server: srv} do
-    ref = Mux.ClientSession.dispatch(cli, %{}, "", %{}, "hello")
+    ref = Mux.ClientSession.dispatch(cli, "", %{}, "hello")
     assert_receive {^srv, {:packet, tag}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
     assert Mux.ClientSession.cancel(cli, ref, "test cancels") == :ok
     assert_receive {^srv, {:packet, 0},
@@ -115,7 +115,7 @@ defmodule Mux.ClientSessionTest do
   end
 
   test "client cancels and ignores app error", %{client: cli, server: srv} do
-    ref = Mux.ClientSession.dispatch(cli, %{}, "", %{}, "hello")
+    ref = Mux.ClientSession.dispatch(cli, "", %{}, "hello")
     assert_receive {^srv, {:packet, tag}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
     assert Mux.ClientSession.cancel(cli, ref, "test cancels") == :ok
     assert_receive {^srv, {:packet, 0},
@@ -130,7 +130,7 @@ defmodule Mux.ClientSessionTest do
   end
 
   test "client cancels and ignores server error", %{client: cli, server: srv} do
-    ref = Mux.ClientSession.dispatch(cli, %{}, "", %{}, "hello")
+    ref = Mux.ClientSession.dispatch(cli, "", %{}, "hello")
     assert_receive {^srv, {:packet, tag}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
     assert Mux.ClientSession.cancel(cli, ref, "test cancels") == :ok
     assert_receive {^srv, {:packet, 0},
@@ -147,7 +147,7 @@ defmodule Mux.ClientSessionTest do
   test "client cancels on explicit cancel and reuses tag", context do
     %{client: cli, server: srv} = context
 
-    ref = Mux.ClientSession.dispatch(cli, %{}, "", %{}, "hello")
+    ref = Mux.ClientSession.dispatch(cli, "", %{}, "hello")
     assert_receive {^srv, {:packet, tag}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
 
     assert Mux.ClientSession.cancel(cli, ref, "test cancels") == :ok
@@ -160,7 +160,7 @@ defmodule Mux.ClientSessionTest do
     # wait for ping to ensure client has handled discarding
     assert_receive {^srv, {:packet, 1}, :receive_ping}
 
-    ref2 = Mux.ClientSession.dispatch(cli, %{}, "", %{}, "hello")
+    ref2 = Mux.ClientSession.dispatch(cli, "", %{}, "hello")
     assert_receive {^srv, {:packet, ^tag}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
 
     assert Mux.ClientSession.cancel(cli, ref, "test cancels") == {:error, :not_found}
@@ -173,41 +173,33 @@ defmodule Mux.ClientSessionTest do
   test "client nacks when at max sessions", context do
     %{client: cli, server: srv} = context
 
-    ref1 = Mux.ClientSession.dispatch(cli, %{}, "", %{}, "hello")
+    ref1 = Mux.ClientSession.dispatch(cli, "", %{}, "hello")
     assert_receive {^srv, {:packet, tag}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
 
-    ref2 = Mux.ClientSession.dispatch(cli, %{}, "", %{}, "nacked")
-    assert_receive {^cli, :nack, {%{}, "", %{}, "nacked"}}
-    send(cli, {self(), {:nack, %{"busy" => "sorry"}}})
-    assert_receive {^ref2, {:nack, %{"busy" => "sorry"}}}
-
-    ref3 = Mux.ClientSession.dispatch(cli, %{}, "", %{}, "nacked again")
-    assert_receive {^cli, :nack, {%{}, "", %{}, "nacked again"}}
-    send(cli, {self(), {:nack, %{"busy" => "not sorry"}}})
-    assert_receive {^ref3, {:nack, %{"busy" => "not sorry"}}}
+    ref2 = Mux.ClientSession.dispatch(cli, "", %{}, "nacked")
+    assert_receive {^ref2, :nack}
 
     MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :ok, %{}, "hi"}}])
+    assert_receive {^ref1, {:ok, "hi"}}
+    refute_received {^srv, _, _}
 
-    assert_receive {^ref1, {:ok, %{}, "hi"}}
-
-    Mux.ClientSession.dispatch(cli, %{}, "", %{}, "hello")
+    Mux.ClientSession.dispatch(cli, "", %{}, "hello")
+    assert_receive {^srv, {:packet, _}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
   end
 
   @tag session_opts: [session_size: 1]
   test "client waits for server discarded before reusing tag", context do
     %{client: cli, server: srv} = context
 
-    ref1 = Mux.ClientSession.dispatch(cli, %{}, "", %{}, "hello")
+    ref1 = Mux.ClientSession.dispatch(cli, "", %{}, "hello")
     assert_receive {^srv, {:packet, tag}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
 
     assert Mux.ClientSession.cancel(cli, ref1, "test cancels") == :ok
     assert_receive {^srv, {:packet, 0},
       {:transmit_discarded, ^tag, "test cancels"}}
 
-    ref2 = Mux.ClientSession.dispatch(cli, %{}, "", %{}, "nacked")
-    assert_receive {^cli, :nack, {%{}, "", %{}, "nacked"}}
-    send(cli, {self(), {:nack, %{"busy" => "sorry"}}})
-    assert_receive {^ref2, {:nack, %{"busy" => "sorry"}}}
+    ref2 = Mux.ClientSession.dispatch(cli, "", %{}, "nacked")
+    assert_receive {^ref2, :nack}
 
     MuxProxy.commands(srv, [{:send, tag, :receive_discarded},
                             {:send, 1, :transmit_ping}])
@@ -216,7 +208,7 @@ defmodule Mux.ClientSessionTest do
     assert_receive {^srv, {:packet, 1}, :receive_ping}
     refute_received {^srv, _, _}
 
-    Mux.ClientSession.dispatch(cli, %{}, "", %{}, "hello")
+    Mux.ClientSession.dispatch(cli,  "", %{}, "hello")
     assert_receive {^srv, {:packet, ^tag}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
   end
 
@@ -280,7 +272,7 @@ defmodule Mux.ClientSessionTest do
   test "client shutdowns on drain once last exchange responds", context do
     %{client: cli, server: srv} = context
     Process.flag(:trap_exit, true)
-    ref1 = Mux.ClientSession.dispatch(cli, %{}, "", %{}, "hello")
+    ref1 = Mux.ClientSession.dispatch(cli, "", %{}, "hello")
     assert_receive {^srv, {:packet, tag}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
 
     MuxProxy.commands(srv, [{:send, 1, :transmit_drain}])
@@ -289,13 +281,11 @@ defmodule Mux.ClientSessionTest do
     assert_receive {^srv, {:packet, 1}, :receive_drain}
 
     # client promised not to send more requests
-    ref2 = Mux.ClientSession.dispatch(cli, %{}, "", %{}, "nacked")
-    assert_receive {^cli, :nack, {%{}, "", %{}, "nacked"}}
-    send(cli, {self(), {:nack, %{"draining" => "sorry"}}})
-    assert_receive {^ref2, {:nack, %{"draining" => "sorry"}}}
+    ref2 = Mux.ClientSession.dispatch(cli, "", %{}, "nacked")
+    assert_receive {^ref2, :nack}
 
     MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :ok, %{}, "ok"}}])
-    assert_receive {^ref1, {:ok, %{}, "ok"}}
+    assert_receive {^ref1, {:ok, "ok"}}
 
     assert_receive {:EXIT, ^srv, :normal}
     assert_received {^srv, :terminate, :normal}
@@ -306,7 +296,7 @@ defmodule Mux.ClientSessionTest do
   test "client shutdowns on cast drain once last exchange responds", context do
     %{client: cli, server: srv} = context
     Process.flag(:trap_exit, true)
-    ref1 = Mux.ClientSession.dispatch(cli, %{}, "", %{}, "hello")
+    ref1 = Mux.ClientSession.dispatch(cli, "", %{}, "hello")
     assert_receive {^srv, {:packet, tag}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
 
     Mux.ClientSession.drain(cli)
@@ -314,13 +304,11 @@ defmodule Mux.ClientSessionTest do
     send(cli, {self(), {:ok, self()}})
 
     # client promised not to send more requests
-    ref2 = Mux.ClientSession.dispatch(cli, %{}, "", %{}, "nacked")
-    assert_receive {^cli, :nack, {%{}, "", %{}, "nacked"}}
-    send(cli, {self(), {:nack, %{"draining" => "sorry"}}})
-    assert_receive {^ref2, {:nack, %{"draining" => "sorry"}}}
+    ref2 = Mux.ClientSession.dispatch(cli, "", %{}, "nacked")
+    assert_receive {^ref2, :nack}
 
     MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :ok, %{}, "ok"}}])
-    assert_receive {^ref1, {:ok, %{}, "ok"}}
+    assert_receive {^ref1, {:ok, "ok"}}
 
     assert_receive {:EXIT, ^srv, :normal}
     assert_received {^srv, :terminate, :normal}
@@ -340,17 +328,15 @@ defmodule Mux.ClientSessionTest do
     assert_receive {^srv, {:packet, tag}, {:transmit_init, 1, %{"hello" => "world"}}}
 
     # client won't handle dispatches until handshake completes
-    ref1 = Mux.ClientSession.dispatch(cli, %{}, "", %{}, "nacked")
-    assert_receive {^cli, :nack, {%{}, "", %{}, "nacked"}}
-    send(cli, {self(), {:nack, %{"handshake" => "sorry"}}})
-    assert_receive {^ref1, {:nack, %{"handshake" => "sorry"}}}
+    ref1 = Mux.ClientSession.dispatch(cli, "", %{}, "nacked")
+    assert_receive {^ref1, :nack}
 
     MuxProxy.commands(srv, [{:send, tag, {:receive_init, 1, %{"hi" => "back"}}}])
 
     assert_receive {^cli, :handshake, %{"hi" => "back"}}
     send(cli, {self(), {:ok, [], self()}})
 
-    _ = Mux.ClientSession.dispatch(cli, %{}, "", %{}, "hello")
+    _ = Mux.ClientSession.dispatch(cli, "", %{}, "hello")
     assert_receive {^srv, {:packet, _}, {:transmit_dispatch, %{}, "", %{}, "hello"}}
   end
 
@@ -405,7 +391,7 @@ defmodule Mux.ClientSessionTest do
     %{client: cli, server: srv} = context
     Process.flag(:trap_exit, true)
 
-    _ = Mux.ClientSession.dispatch(cli, %{}, "hello", %{}, "world")
+    _ = Mux.ClientSession.dispatch(cli, "hello", %{}, "world")
     assert_receive {^srv, {:packet, _}, {:transmit_dispatch, %{}, "hello", %{}, "world"}}
 
     # close srv while cli is awaiting a response

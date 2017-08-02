@@ -72,14 +72,6 @@ defmodule MuxClientProxy do
   def init(parent),
     do: {:ok, parent}
 
-  def nack(context, dest, dest_tab, body, parent) do
-    send(parent, {self(), :nack, {context, dest, dest_tab, body}})
-    receive do
-      {^parent, result} ->
-        result
-    end
-  end
-
   def lease(time_unit, timeout, parent) do
     send(parent, {self(), :lease, {time_unit, timeout}})
     receive do
@@ -140,16 +132,9 @@ defmodule MuxServerProxy do
   def init(parent),
     do: {:ok, parent}
 
-  def dispatch(context, dest, dest_tab, body, parent) do
+  def dispatch(dest, dest_tab, body, parent) do
+    context = Mux.Context.get()
     send(parent, {self(), :dispatch, {context, dest, dest_tab, body}})
-    receive do
-      {^parent, result} ->
-        result
-    end
-  end
-
-  def nack(context, dest, dest_tab, body, parent) do
-    send(parent, {self(), :nack, {context, dest, dest_tab, body}})
     receive do
       {^parent, result} ->
         result
