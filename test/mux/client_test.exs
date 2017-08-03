@@ -3,12 +3,15 @@ defmodule Mux.ClientTest do
 
   setup context do
     dest = "#{inspect context[:case]} #{context[:test]}"
+    alarm_id = {:drain, dest}
+    if context[:set_alarm], do: :alarm_handler.set_alarm({alarm_id, self()})
 
     opts =
       context
       |> Map.to_list()
       |> Keyword.put_new(:debug, [:log])
       |> Keyword.put_new(:clients, 1)
+      |> Keyword.put_new(:drain_alarms, [alarm_id])
 
     {cli_info, srv_info} = pairs(dest, opts)
 
@@ -16,7 +19,7 @@ defmodule Mux.ClientTest do
     {lsocks, srvs} = Enum.unzip(srv_info)
 
     {:ok, [clients: clis, servers: srvs, supervisors: sups, listen: lsocks,
-           dest: dest, opts: opts]}
+           dest: dest, alarm_id: alarm_id, opts: opts]}
   end
 
   test "client registers itself with destination", context do
@@ -64,7 +67,6 @@ defmodule Mux.ClientTest do
     assert stop(context) == []
   end
 
-  @tag :reconnect
   @tag :capture_log
   test "client reconnects", context do
     %{clients: [cli1], servers: [srv1], listen: [lsock], opts: opts} = context
@@ -115,6 +117,52 @@ defmodule Mux.ClientTest do
     assert_receive {^srv, :terminate, :normal}
   end
 
+  @tag :set_alarm
+  @tag :capture_log
+  @tag :skip_accept
+  @tag connect_interval: 50
+  test "client doesn't connect if alarm already set", context do
+    %{servers: [srv_task], alarm_id: alarm_id, opts: opts} = context
+    refute Task.yield(srv_task, 200)
+    :alarm_handler.clear_alarm(alarm_id)
+    srv_sock = Task.await(srv_task, 100)
+    srv = MuxProxy.spawn_link(srv_sock, opts)
+    assert_receive {^srv, {:packet, tag}, {:transmit_init, 1, %{}}}
+    MuxProxy.commands(srv, [{:send, tag, {:receive_init, 1, %{}}}])
+    assert_receive {cli, :handshake, %{}}
+    send(cli, {self(), {:ok, [], self()}})
+
+    assert stop(%{context | servers: [srv], clients: [cli]}) == [{:normal, :normal}]
+  end
+
+  @tag :capture_log
+  @tag connect_interval: 50
+  test "client drains and reconnects once alarm clears", context do
+    %{clients: [cli1], servers: [srv1], listen: [lsock],
+      alarm_id: alarm_id, opts: opts} = context
+
+    :alarm_handler.set_alarm({alarm_id, self()})
+    assert_receive {^cli1, :drain, nil}
+    send(cli1, {self(), {:ok, self()}})
+
+    assert_receive {^cli1, :terminate, :normal}
+    assert_receive {^srv1, :terminate, :normal}
+
+    assert :gen_tcp.accept(lsock, 100) == {:error, :timeout}
+
+    :alarm_handler.clear_alarm(alarm_id)
+    assert {:ok, srv_sock2} = :gen_tcp.accept(lsock, 100)
+    srv2 = MuxProxy.spawn_link(srv_sock2, opts)
+
+    assert_receive {^srv2, {:packet, tag}, {:transmit_init, 1, %{}}}
+    MuxProxy.commands(srv2, [{:send, tag, {:receive_init, 1, %{}}}])
+    assert_receive {cli2, :handshake, %{}}
+    send(cli2, {self(), {:ok, Keyword.get(opts, :session_opts, []), self()}})
+
+    assert stop(%{context | clients: [cli2], servers: [srv2]}) ==
+      [{:normal, :normal}]
+  end
+
   defp pairs(dest, opts) do
     case opts[:clients] do
       0 ->
@@ -144,15 +192,20 @@ defmodule Mux.ClientTest do
       |> Keyword.put(:handshake, {MuxClientProxy.Handshake, {%{}, self()}})
 
     {:ok, sup} = Mux.Client.start_link(MuxClientProxy, dest, self(), cli_opts)
-    srv_sock = Task.await(srv_task)
 
-    srv = MuxProxy.spawn_link(srv_sock, opts)
-    assert_receive {^srv, {:packet, tag}, {:transmit_init, 1, %{}}}
-    MuxProxy.commands(srv, [{:send, tag, {:receive_init, 1, %{}}}])
-    assert_receive {cli, :handshake, %{}}
-    send(cli, {self(), {:ok, Keyword.get(opts, :session_opts, []), self()}})
+    if opts[:skip_accept] do
+      [{{sup, nil}, {l, srv_task}} | pairs]
+    else
+      srv_sock = Task.await(srv_task)
 
-    [{{sup, cli}, {l, srv}} | pairs]
+      srv = MuxProxy.spawn_link(srv_sock, opts)
+      assert_receive {^srv, {:packet, tag}, {:transmit_init, 1, %{}}}
+      MuxProxy.commands(srv, [{:send, tag, {:receive_init, 1, %{}}}])
+      assert_receive {cli, :handshake, %{}}
+      send(cli, {self(), {:ok, Keyword.get(opts, :session_opts, []), self()}})
+
+      [{{sup, cli}, {l, srv}} | pairs]
+    end
   end
 
   defp stop(%{clients: clis, servers: srvs, listen: lsocks}) do

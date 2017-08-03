@@ -6,14 +6,15 @@ defmodule Mux.Client.Manager do
   @connect_timeout 5_000
   @connect_interval 5_000
   @connect_options [active: false]
+  @drain_alarms []
 
   defmodule Data do
     @moduledoc false
 
     @enforce_keys [:dest, :address, :port, :socket_opt, :timeout, :interval,
-                   :supervisor, :monitor, :session]
+                   :supervisor, :monitor, :session, :drain, :alarms]
     defstruct [:dest, :address, :port, :socket_opt, :timeout, :interval,
-               :supervisor, :monitor, :session]
+               :supervisor, :monitor, :session, :drain, :alarms]
   end
 
   @type address :: :inet.sock_address() | :inet.hostname()
@@ -41,9 +42,11 @@ defmodule Mux.Client.Manager do
     sock_opt = Keyword.get(opts, :socket_opt, [])
     timeout = Keyword.get(opts, :connect_timeout, @connect_timeout)
     interval = Keyword.get(opts, :connect_interval, @connect_interval)
+    drain_ref = make_ref()
+    alarms = watch_alarms(drain_ref, opts)
     data = %Data{dest: dest, address: addr, port: port, socket_opt: sock_opt,
                  timeout: timeout, interval: interval, supervisor: sup,
-                 monitor: nil, session: nil}
+                 monitor: nil, session: nil, drain: drain_ref, alarms: alarms}
     {:ok, :init, data, [{:next_event, :internal, :init}]}
   end
 
@@ -68,12 +71,22 @@ defmodule Mux.Client.Manager do
         {:stop, {:shutdown, reason}, data}
     end
   end
+  def open(:info, {:SET, ref, id},
+      %Data{drain: ref, session: pid, alarms: alarms} = data) do
+    # session stays open until exchanges are processed
+    Mux.ClientSession.drain(pid)
+    {:keep_state, %Data{data | alarms: MapSet.put(alarms, id)}}
+  end
   def open(:info, msg, data),
     do: info(msg, data)
 
   def closed(_, {:connect, _}, data),
-    do: handle_connect(data)
+    do: connect(data)
 
+  def closed(:info, {:SET, ref, id},
+      %Data{drain: ref, alarms: alarms} = data) do
+    {:keep_state, %Data{data | alarms: MapSet.put(alarms, id)}}
+  end
   def closed(:info, msg, data),
     do: info(msg, data)
 
@@ -89,14 +102,31 @@ defmodule Mux.Client.Manager do
 
   ## Helpers
 
+  # clearing an alarm doesn't change state, must wait for session change
+  defp info({:CLEAR, ref, id}, %Data{drain: ref, alarms: alarms} = data) do
+    {:keep_state, %Data{data | alarms: MapSet.delete(alarms, id)}}
+  end
   defp info(msg, _) do
     :error_logger.error_msg("#{__MODULE__} received unexpected message: ~p~n",
                             [msg])
     :keep_state_and_data
   end
 
-  def connect(),
+  defp connect(),
     do: [{:next_event, :internal, {:connect, 0}}]
+
+  defp backoff(interval) do
+    backoff = rand_interval(interval)
+    [{:state_timeout, backoff, {:connect, backoff}}]
+  end
+
+  defp connect(%Data{alarms: alarms, interval: interval} = data) do
+    if MapSet.size(alarms) > 0 do
+      {:keep_state_and_data, backoff(interval)}
+    else
+      handle_connect(data)
+    end
+  end
 
   defp handle_connect(data) do
     %Data{address: addr, port: port, socket_opt: opts, timeout: timeout,
@@ -106,13 +136,20 @@ defmodule Mux.Client.Manager do
         {pid, mon} = Mux.Client.Pool.start_session(sup, sock)
         {:next_state, :open, %Data{data | monitor: mon, session: pid}}
       {:error, _} ->
-        backoff = rand_interval(interval)
-        {:keep_state_and_data, [{:state_timeout, backoff, {:connect, backoff}}]}
+        {:keep_state_and_data, backoff(interval)}
     end
   end
 
   defp rand_interval(interval) do
     # randomise uniform around [0.5 interval, 1.5 interval]
     div(interval, 2) + :rand.uniform(interval + 1) - 1
+  end
+
+  defp watch_alarms(drain_ref, opts) do
+    # register returns true if alarm is set
+    opts
+    |> Keyword.get(:drain_alarms, @drain_alarms)
+    |> Enum.filter(&Mux.Alarm.register(Mux.Alarm, &1, drain_ref))
+    |> Enum.into(MapSet.new())
   end
 end

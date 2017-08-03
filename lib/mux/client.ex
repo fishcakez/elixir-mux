@@ -17,7 +17,8 @@ defmodule Mux.Client do
     {:connect_interval, timeout} |
     {:grace, timeout}
 
-  @manager_options [:socket_opt, :connect_timeout, :connect_interval, :grace]
+  @manager_options [:socket_opt, :connect_timeout, :connect_interval,
+                    :drain_alarms, :grace]
 
   @spec sync_dispatch(Mux.Packet.dest, Mux.Packet.dest_table, body :: binary,
         timeout) :: Mux.ClientSession.result
@@ -61,9 +62,6 @@ defmodule Mux.Client do
     {addr, opts} = pop!(opts, :address)
     {port, opts} = pop!(opts, :port)
     {man_opts, pool_opts} = Keyword.split(opts, @manager_options)
-    # manager depends on pool and pool children should exit with/after manager,
-    # later we should try to pause in termination of manager to gracefully
-    # drain client so manager should be started second and shutdown first
     children = [{Mux.Client.Pool, {module, dest, arg, pool_opts}},
                 {Mux.Client.Manager, {dest, addr, port, man_opts}}]
     sup_opts = [strategy: :one_for_all, max_restarts: 0]
