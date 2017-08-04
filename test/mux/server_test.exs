@@ -3,24 +3,21 @@ defmodule Mux.ServerTest do
 
   setup context do
     dest = "#{inspect context[:case]} #{context[:test]}"
-    drain_id = {:drain, dest}
-    lease_id = {:lease, dest}
-    if context[:set_drain], do: :alarm_handler.set_alarm({drain_id, self()})
-    if context[:set_lease], do: :alarm_handler.set_alarm({lease_id, self()})
+    alarm_id = {:drain, dest}
+    if context[:set_alarm], do: :alarm_handler.set_alarm({alarm_id, self()})
 
     opts =
       context
       |> Map.to_list()
       |> Keyword.put_new(:debug, [:log])
-      |> Keyword.put_new(:drain_alarms, [drain_id])
-      |> Keyword.put_new(:lease_alarms, [lease_id])
+      |> Keyword.put_new(:drain_alarms, [alarm_id])
       |> Keyword.put(:session, {MuxServerProxy.Session, self()})
       |> Keyword.put(:presentation, {MuxTest, nil})
 
     {cli, srv, sup} = pair(dest, opts)
 
     {:ok, [client: cli, server: srv, supervisor: sup, dest: dest,
-           drain_id: drain_id, lease_id: lease_id]}
+           alarm_id: alarm_id]}
   end
 
   test "server registers itself with destination", context do
@@ -62,7 +59,7 @@ defmodule Mux.ServerTest do
     assert_receive {:DOWN, ^mon, _, _, :killed}
   end
 
-  @tag :set_drain
+  @tag :set_alarm
   @tag :capture_log
   test "server drains if alarm already set", context do
     %{client: cli} = context
@@ -73,52 +70,12 @@ defmodule Mux.ServerTest do
 
   @tag :capture_log
   test "server drains once alarm is set", context do
-    %{client: cli, drain_id: alarm_id} = context
+    %{client: cli, alarm_id: alarm_id} = context
     refute_received {^cli, {:packet, _}, :transmit_drain}
     :alarm_handler.set_alarm({alarm_id, self()})
     assert_receive {^cli, {:packet, tag}, :transmit_drain}
     MuxProxy.commands(cli, [{:send, tag, :receive_drain}])
-    context = Map.put(context, :set_drain, true)
-    assert stop(context) == {:normal, :normal}
-  end
-
-  @tag :set_lease
-  @tag lease_interval: 1_000
-  @tag :capture_log
-  test "server sends 0 lease if alarm already set", context do
-    %{client: cli} = context
-    assert_receive {^cli, {:packet, 0}, {:transmit_lease, :millisecond, 0}}
-    assert stop(context) == {:normal, :normal}
-  end
-
-  @tag lease_interval: 10
-  @tag :capture_log
-  test "server stops leasing when alarm set and leases on clear", context do
-    %{client: cli, lease_id: alarm_id} = context
-    assert_receive {^cli, {:packet, 0}, {:transmit_lease, :millisecond, lease}}
-    assert lease >= 5
-    assert lease <= 15
-
-    :alarm_handler.set_alarm({alarm_id, self()})
-    assert Enum.all?(flush_leases(cli),
-                     fn lease -> lease >= 5 and lease <= 15 end)
-
-    # no longer have a lease, dispatches nack
-    MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "hi", %{}, "world"}}])
-    assert_receive {^cli, {:packet, _}, {:receive_dispatch, :nack, %{}, ""}}
-
-    :alarm_handler.clear_alarm(alarm_id)
-
-    assert_receive {^cli, {:packet, 0}, {:transmit_lease, :millisecond, lease}}
-    assert lease >= 5
-    assert lease <= 15
-
-    # got a lease again, dispatches succeed
-    MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "hi", %{}, "world"}}])
-    assert_receive {task, :dispatch, {%{}, "hi", %{}, %MuxTest{body: "world"}}}
-    send(task, {self(), {:ok, %MuxTest{body: "hello"}}})
-    assert_receive {^cli, {:packet, _}, {:receive_dispatch, :ok, %{}, "hello"}}
-
+    context = Map.put(context, :set_alarm, true)
     assert stop(context) == {:normal, :normal}
   end
 
@@ -150,14 +107,11 @@ defmodule Mux.ServerTest do
     # parent of sup (and it traps exits) so it will stop normally asynchronously
     Process.exit(sup, :normal)
     # srv should ask us to drain to initiate clean shutdown
-    if context[:set_drain] do
-      :alarm_handler.clear_alarm(context.drain_id)
+    if context[:set_alarm] do
+      :alarm_handler.clear_alarm(context.alarm_id)
     else
       assert_receive {^cli, {:packet, tag}, :transmit_drain}
       MuxProxy.commands(cli, [{:send, tag, :receive_drain}])
-    end
-    if context[:set_lease] do
-      :alarm_handler.clear_alarm(context.lease_id)
     end
     # close writes on client to trigger half close and server should trigger
     # clean close
@@ -168,16 +122,5 @@ defmodule Mux.ServerTest do
     assert_receive {^cli, :terminate, cli_reason}
     assert_receive {^srv, :terminate, srv_reason}
     {cli_reason, srv_reason}
-  end
-
-  defp flush_leases(cli, acc \\ []) do
-    timeout = ExUnit.configuration[:assert_receive_timeout] || 100
-    receive do
-      {^cli, {:packet, 0}, {:transmit_lease, :millisecond, lease}} ->
-        flush_leases(cli, [lease | acc])
-    after
-      timeout ->
-        Enum.reverse(acc)
-    end
   end
 end
