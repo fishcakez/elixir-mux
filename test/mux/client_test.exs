@@ -25,7 +25,8 @@ defmodule Mux.ClientTest do
   test "client registers itself with destination", context do
     %{clients: [cli], dest: dest} = context
     assert Registry.keys(Mux.ClientSession, cli) == [dest]
-    assert Registry.lookup(Mux.ClientSession, dest) == [{cli, MuxClientProxy}]
+    assert Registry.lookup(Mux.ClientSession, dest) ==
+      [{cli, MuxClientProxy.Handshake}]
     assert stop(context) == [{:normal, :normal}]
   end
 
@@ -72,8 +73,6 @@ defmodule Mux.ClientTest do
     %{clients: [cli1], servers: [srv1], listen: [lsock], opts: opts} = context
 
     MuxProxy.commands(srv1, [{:send, 1, :transmit_drain}])
-    assert_receive {^cli1, :drain, nil}
-    send(cli1, {self(), {:ok, self()}})
     assert_receive {^srv1, {:packet, 1}, :receive_drain}
 
     assert_receive {^cli1, :terminate, :normal}
@@ -99,16 +98,16 @@ defmodule Mux.ClientTest do
     # parent of supervisor and it traps so will exit normally
     Process.exit(sup, :normal)
 
-    assert_receive {^cli, :drain, nil}
-    send(cli, {self(), {:ok, self()}})
-
     # check socket still works
     MuxProxy.commands(srv, [{:send, 1, :transmit_ping}])
     assert_receive {^srv, {:packet, 1}, :receive_ping}
 
-    # client not going to send more requests
-    task2 = Task.async(Mux.Client, :sync_dispatch, [dest, %{}, "nacked"])
+    # client session not going to send more requests
+    task2 = Task.async(Mux.ClientSession, :sync_dispatch, [cli, dest, %{}, "nacked"])
     assert Task.await(task2) == :nack
+
+    # client session not registered anymore!
+    assert Registry.lookup(Mux.ClientSession, dest) == []
 
     MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :ok, %{}, "ok"}}])
     assert Task.await(task1) == {:ok, "ok"}
@@ -142,8 +141,6 @@ defmodule Mux.ClientTest do
       alarm_id: alarm_id, opts: opts} = context
 
     :alarm_handler.set_alarm({alarm_id, self()})
-    assert_receive {^cli1, :drain, nil}
-    send(cli1, {self(), {:ok, self()}})
 
     assert_receive {^cli1, :terminate, :normal}
     assert_receive {^srv1, :terminate, :normal}
@@ -191,7 +188,7 @@ defmodule Mux.ClientTest do
       |> Keyword.put(:port, port)
       |> Keyword.put(:handshake, {MuxClientProxy.Handshake, {%{}, self()}})
 
-    {:ok, sup} = Mux.Client.start_link(MuxClientProxy, dest, self(), cli_opts)
+    {:ok, sup} = Mux.Client.start_link(dest, cli_opts)
 
     if opts[:skip_accept] do
       [{{sup, nil}, {l, srv_task}} | pairs]
@@ -203,6 +200,8 @@ defmodule Mux.ClientTest do
       MuxProxy.commands(srv, [{:send, tag, {:receive_init, 1, %{}}}])
       assert_receive {cli, :handshake, %{}}
       send(cli, {self(), {:ok, Keyword.get(opts, :session_opts, []), self()}})
+      # sync with client session to make sure its finished handshake calls
+      :sys.get_state(cli)
 
       [{{sup, cli}, {l, srv}} | pairs]
     end
@@ -212,8 +211,6 @@ defmodule Mux.ClientTest do
     for lsock <- lsocks, do: :gen_tcp.close(lsock)
     for {cli, srv} <- Enum.zip(clis, srvs) do
       MuxProxy.commands(srv, [{:send, 1, :transmit_drain}])
-      assert_receive {^cli, :drain, nil}
-      send(cli, {self(), {:ok, self()}})
       assert_receive {^srv, {:packet, 1}, :receive_drain}
 
       assert_receive {^cli, :terminate, cli_reason}

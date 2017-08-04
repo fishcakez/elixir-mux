@@ -2,17 +2,11 @@ defmodule Mux.ClientHandshake do
   @moduledoc """
   Client handshake behaviour.
   """
-  @type state :: any
-  @type session_option ::
-    {:session_size, pos_integer} |
-    {:frame_size, pos_integer} |
-    {:ping_interval, timeout}
+  @callback init(arg :: any) ::
+    {:ok, Mux.Packet.headers, state :: any}
 
-  @callback init(state) ::
-    {:ok, Mux.Packet.headers, state}
+  @callback handshake(Mux.Packet.headers, state :: any) ::
+    {:ok, [Mux.ClientSession.session_option], state :: any}
 
-  @callback handshake(Mux.Packet.headers, state) ::
-    {:ok, [session_option], state}
-
-  @callback terminate(reason :: any, state) :: any
+  @callback terminate(reason :: any, state :: any) :: any
 end

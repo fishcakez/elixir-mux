@@ -49,28 +49,35 @@ defmodule MuxClientProxy do
       end
     end
 
-    def terminate(_reason, _parent),
-      do: :ok
+    def terminate(reason, parent),
+      do: send(parent, {self(), :terminate, reason})
   end
 
   def spawn_link(socket, headers, opts) do
-    handshake = {__MODULE__.Handshake, {headers, self()}}
-    opts = Keyword.put_new(opts, :handshake, handshake)
-    pid = :proc_lib.spawn_link(__MODULE__, :init_it, [self(), opts])
+    pid = :proc_lib.spawn_link(__MODULE__, :init_it, [self(), headers, opts])
     :ok = :gen_tcp.controlling_process(socket, pid)
     send(pid, {self(), socket})
     pid
   end
 
-  def init_it(parent, opts) do
+  def init_it(parent, headers, opts) do
     receive do
       {^parent, socket} ->
-        Mux.ClientSession.enter_loop(__MODULE__, socket, parent, opts)
+        arg = {headers, parent}
+        Mux.ClientSession.enter_loop(__MODULE__, socket, arg, opts)
     end
   end
 
-  def init(parent),
-    do: {:ok, parent}
+  def init({headers, parent}),
+    do: {:ok, headers, parent}
+
+  def handshake(headers, parent) do
+    send(parent, {self(), :handshake, headers})
+    receive do
+      {^parent, result} ->
+        result
+    end
+  end
 
   def lease(time_unit, timeout, parent) do
     send(parent, {self(), :lease, {time_unit, timeout}})
