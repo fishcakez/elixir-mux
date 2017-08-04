@@ -1,6 +1,6 @@
-defmodule Mux.ServerHandshake do
+defmodule Mux.ServerSession do
   @moduledoc """
-  Server handshake behaviour.
+  Server OSI session layer behaviour.
   """
   @type state :: any
   @type option ::

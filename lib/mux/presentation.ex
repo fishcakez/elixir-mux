@@ -1,6 +1,6 @@
 defmodule Mux.Presentation do
   @moduledoc """
-  Presenation layer behaviour.
+  OSI presenation layer behaviour.
   """
   @callback init(arg :: any) ::
     {:ok, state :: any}

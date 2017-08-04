@@ -1,6 +1,6 @@
-defmodule Mux.ServerHandler do
+defmodule Mux.ServerApplication do
   @moduledoc """
-  Server handler behaviour.
+  Server OSI application layer behaviour.
   """
   @type result ::
     {:ok, body :: binary} |

@@ -33,9 +33,9 @@ defmodule Mux.Server.Pool do
 
     flags = %{intensity: max_restarts, period: max_seconds}
 
-    {handshake, opts} = pop!(opts, :handshake)
+    {session, opts} = pop!(opts, :session)
     {present, opts} = pop!(opts, :presentation)
-    man_arg = {dest, handshake, present, {module, arg}, opts}
+    man_arg = {dest, session, present, {module, arg}, opts}
 
     spec = %{id: {dest, module},
              start: {Mux.Server.Manager, man_arg, []},

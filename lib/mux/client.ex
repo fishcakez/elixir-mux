@@ -15,8 +15,8 @@ defmodule Mux.Client do
     {:socket_opt, [:gen_tcp.connect_option]} |
     {:connect_timeout, timeout} |
     {:connect_interval, timeout} |
-    {:handshake, {module, any}} |
     {:handshake_timeout, timeout} |
+    {:session, {module, any}} |
     {:presentation, {module, any}} |
     {:grace, timeout}
 

@@ -53,8 +53,8 @@ end
 defmodule MuxClientProxy do
   @behaviour Mux.Client.Connection
 
-  defmodule Handshake do
-    @behaviour Mux.ClientHandshake
+  defmodule Session do
+    @behaviour Mux.ClientSession
 
     def init({headers, parent}),
       do: {:ok, headers, parent}
@@ -120,8 +120,8 @@ end
 defmodule MuxServerProxy do
   @behaviour Mux.Server.Connection
 
-  defmodule Handshake do
-    @behaviour Mux.ServerHandshake
+  defmodule Session do
+    @behaviour Mux.ServerSession
 
     def init(parent),
       do: {:ok, parent}
@@ -138,8 +138,8 @@ defmodule MuxServerProxy do
       do: :ok
   end
 
-  defmodule Handler do
-    @behaviour Mux.ServerHandler
+  defmodule Application do
+    @behaviour Mux.ServerApplication
 
     def init({contexts, parent}),
       do: {:ok, contexts, parent}

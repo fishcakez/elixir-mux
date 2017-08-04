@@ -186,7 +186,7 @@ defmodule Mux.ClientTest do
       opts
       |> Keyword.put(:address, ip)
       |> Keyword.put(:port, port)
-      |> Keyword.put(:handshake, {MuxClientProxy.Handshake, {%{}, self()}})
+      |> Keyword.put(:session, {MuxClientProxy.Session, {%{}, self()}})
       |> Keyword.put(:presentation, {MuxTest, nil})
 
     {:ok, sup} = Mux.Client.start_link(dest, cli_opts)

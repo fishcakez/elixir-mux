@@ -1,6 +1,6 @@
-defmodule Mux.ClientHandshake do
+defmodule Mux.ClientSession do
   @moduledoc """
-  Client handshake behaviour.
+  Client OSI session layer behaviour.
   """
   @type option ::
     {:session_size, pos_integer} |

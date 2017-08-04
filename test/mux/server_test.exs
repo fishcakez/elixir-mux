@@ -14,7 +14,7 @@ defmodule Mux.ServerTest do
       |> Keyword.put_new(:debug, [:log])
       |> Keyword.put_new(:drain_alarms, [drain_id])
       |> Keyword.put_new(:lease_alarms, [lease_id])
-      |> Keyword.put(:handshake, {MuxServerProxy.Handshake, self()})
+      |> Keyword.put(:session, {MuxServerProxy.Session, self()})
       |> Keyword.put(:presentation, {MuxTest, nil})
 
     {cli, srv, sup} = pair(dest, opts)

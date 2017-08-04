@@ -3,25 +3,25 @@ defmodule Mux.Client.Delegator do
 
   @behaviour Mux.Client.Connection
 
-  def init({dest, {handshake, arg1}, {present, arg2}}) do
-    {:ok, headers, state1} = apply(handshake, :init, [arg1])
+  def init({dest, {session, arg1}, {present, arg2}}) do
+    {:ok, headers, state1} = apply(session, :init, [arg1])
     try do
       {:ok, _state2} = apply(present, :init, [arg2])
     catch
       kind, reason ->
         stack = System.stacktrace()
-        apply(handshake, :terminate, [reason, state1])
+        apply(session, :terminate, [reason, state1])
         :erlang.raise(kind, reason, stack)
     else
       {:ok, state2} ->
-        {:ok, headers, {dest, {handshake, state1}, {present, state2}}}
+        {:ok, headers, {dest, {session, state1}, {present, state2}}}
     end
   end
 
-  def handshake(headers, {dest, {handshake, state}, present_info}) do
-    {:ok, opts, state} = apply(handshake, :handshake, [headers, state])
+  def handshake(headers, {dest, {session, state}, present_info}) do
+    {:ok, opts, state} = apply(session, :handshake, [headers, state])
     {:ok, _} = Registry.register(Mux.Client.Connection, dest, present_info)
-    {:ok, opts, {dest, {handshake, state}, present_info}}
+    {:ok, opts, {dest, {session, state}, present_info}}
   end
 
   def lease(_, _, data),
@@ -32,16 +32,16 @@ defmodule Mux.Client.Delegator do
     {:ok, data}
   end
 
-  def terminate(reason, {dest, handshake_info, present_info}) do
+  def terminate(reason, {dest, session_info, present_info}) do
     Registry.unregister(Mux.Client.Connection, dest)
   after
-    terminate(reason, handshake_info, present_info)
+    terminate(reason, session_info, present_info)
   end
 
-  defp terminate(reason, {handshake, state1}, {present, state2}) do
+  defp terminate(reason, {session, state1}, {present, state2}) do
     # terminate in reverse order of init/1
     apply(present, :terminate, [reason, state2])
   after
-    apply(handshake, :terminate, [reason, state1])
+    apply(session, :terminate, [reason, state1])
   end
 end

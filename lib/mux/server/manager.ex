@@ -16,16 +16,16 @@ defmodule Mux.Server.Manager do
     defstruct [:session, :drain, :lease, :alarms, :interval]
   end
 
-  def acceptor_init(_, lsock, {dest, handshake, present, handler, opts}) do
+  def acceptor_init(_, lsock, {dest, session, present, handler, opts}) do
     ref = :erlang.monitor(:port, lsock)
-    {:ok, {dest, ref, handshake, present, handler, opts}}
+    {:ok, {dest, ref, session, present, handler, opts}}
   end
 
   def acceptor_continue(_, sock, arg) do
-    {dest, ref, handshake, present, handler, opts} = arg
+    {dest, ref, session, present, handler, opts} = arg
     Process.flag(:trap_exit, true)
     {man_opts, opts} = Keyword.split(opts, @options)
-    pid = spawn_session(dest, ref, handshake, present, handler, opts)
+    pid = spawn_session(dest, ref, session, present, handler, opts)
     actions = [{:next_event, :internal, {:init, sock, man_opts}}]
     interval = Keyword.get(man_opts, :lease_interval, @lease_interval)
     data = %Data{session: pid, drain: ref, lease: make_ref(),
@@ -169,19 +169,19 @@ defmodule Mux.Server.Manager do
     |> Enum.into(MapSet.new())
   end
 
-  defp spawn_session(dest, ref, handshake, present, handler, opts) do
+  defp spawn_session(dest, ref, session, present, handler, opts) do
     {spawn_opts, opts} = Keyword.split(opts, [:spawn_opt])
-    spawn_args = [ref, dest, handshake, present, handler, opts]
+    spawn_args = [ref, dest, session, present, handler, opts]
     spawn_opts = [:link | spawn_opts]
     :proc_lib.spawn_opt(__MODULE__, :init_session, spawn_args, spawn_opts)
   end
 
-  def init_session(ref, dest, handshake, present, handler, opts) do
+  def init_session(ref, dest, session, present, handler, opts) do
     {module, _} = handler
     {:ok, _} = Registry.register(Mux.Server.Connection, dest, module)
     receive do
       {:enter_loop, ^ref, sock} ->
-        arg = {handshake, present, handler}
+        arg = {session, present, handler}
         Mux.Server.Connection.enter_loop(Mux.Server.Delegator, sock, arg, opts)
     end
   end
