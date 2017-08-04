@@ -120,9 +120,26 @@ defmodule MuxServerProxy do
       do: :ok
   end
 
+  defmodule Handler do
+    @behaviour Mux.ServerHandler
+
+    def init(parent),
+      do: {:ok, parent}
+
+    def dispatch(dest, dest_tab, body, parent) do
+      context = Mux.Context.get()
+      send(parent, {self(), :dispatch, {context, dest, dest_tab, body}})
+      receive do
+        {^parent, result} ->
+          result
+      end
+    end
+
+    def terminate(reason, parent),
+      do: send(parent, {self(), :terminate, reason})
+  end
+
   def spawn_link(socket, opts) do
-    handshake = {__MODULE__.Handshake, self()}
-    opts = Keyword.put_new(opts, :handshake, handshake)
     pid = :proc_lib.spawn_link(__MODULE__, :init_it, [self(), opts])
     :ok = :gen_tcp.controlling_process(socket, pid)
     send(pid, {self(), socket})
@@ -138,6 +155,14 @@ defmodule MuxServerProxy do
 
   def init(parent),
     do: {:ok, parent}
+
+  def handshake(headers, parent) do
+    send(parent, {self(), :handshake, headers})
+    receive do
+      {^parent, result} ->
+        result
+    end
+  end
 
   def dispatch(dest, dest_tab, body, parent) do
     context = Mux.Context.get()

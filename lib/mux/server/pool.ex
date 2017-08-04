@@ -33,12 +33,27 @@ defmodule Mux.Server.Pool do
 
     flags = %{intensity: max_restarts, period: max_seconds}
 
+    {handshake, opts} = pop!(opts, :handshake)
+    man_arg = {dest, handshake, {module, arg}, opts}
+
     spec = %{id: {dest, module},
-             start: {Mux.Server.Manager, {module, dest, arg, opts}, []},
+             start: {Mux.Server.Manager, man_arg, []},
              type: :supervisor,
              restart: restart,
              grace: grace}
 
     {:ok, {flags, [spec]}}
+  end
+
+  defp pop!(opts, key) do
+    case Keyword.pop(opts, key) do
+      {nil, _opts} ->
+        raise ArgumentError, "#{key} callback not specified"
+      {{_mod, _arg}, _opts} = result ->
+        result
+      {bad, _opts} ->
+        raise ArgumentError,
+          "expected {module, arg} for #{key}, got: #{inspect bad}"
+    end
   end
 end

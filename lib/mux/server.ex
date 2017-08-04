@@ -16,6 +16,7 @@ defmodule Mux.Server do
     {:spawn_opt, [:proc_lib.spawn_option]} |
     {:port, :inet.port_number} |
     {:socket_opt, [:gen_tcp.listen_option]} |
+    {:handshake, {module, any}} |
     {:lease_interval, timeout} |
     {:lease_alarms, [any()]} |
     {:drain_alarms, [any()]}
