@@ -1,10 +1,5 @@
-defmodule Mux.ClientSession do
-  @moduledoc """
-  Client loop for a Mux session.
-
-  This module defines a TCP Mux client that multiplexes dispatches over a
-  single session.
-  """
+defmodule Mux.Client.Connection do
+  @moduledoc false
 
   @behaviour Mux.Connection
 

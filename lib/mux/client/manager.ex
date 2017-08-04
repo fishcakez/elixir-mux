@@ -74,7 +74,7 @@ defmodule Mux.Client.Manager do
   def open(:info, {:SET, ref, id},
       %Data{drain: ref, session: pid, alarms: alarms} = data) do
     # session stays open until exchanges are processed
-    Mux.ClientSession.drain(pid)
+    Mux.Client.Connection.drain(pid)
     {:keep_state, %Data{data | alarms: MapSet.put(alarms, id)}}
   end
   def open(:info, msg, data),
@@ -93,7 +93,7 @@ defmodule Mux.Client.Manager do
   def terminate(_, _, %Data{monitor: nil}),
     do: :ok
   def terminate(_, _, %Data{monitor: mon, session: pid}) do
-    Mux.ClientSession.drain(pid)
+    Mux.Client.Connection.drain(pid)
     receive do
       {:DOWN, ^mon, _, _, _} ->
         :ok

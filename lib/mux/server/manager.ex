@@ -58,7 +58,7 @@ defmodule Mux.Server.Manager do
   end
 
   def drain(:enter, _, %Data{session: pid}) do
-    Mux.ServerSession.drain(pid)
+    Mux.Server.Connection.drain(pid)
     :keep_state_and_data
   end
 
@@ -70,7 +70,7 @@ defmodule Mux.Server.Manager do
 
   def lease(:enter, _, %Data{session: pid, interval: interval}) do
     timeout = rand_interval(interval)
-    Mux.ServerSession.lease(pid, :millisecond, timeout)
+    Mux.Server.Connection.lease(pid, :millisecond, timeout)
     # try to grant a new lease in plenty of time before this one ends
     renew = div(2 * timeout, 3)
     {:keep_state_and_data, [{:state_timeout, renew, renew}]}
@@ -148,7 +148,7 @@ defmodule Mux.Server.Manager do
         {:next_state, :drain, data}
       MapSet.size(alarms) > 0 and interval != :infinity ->
         # send a 0 lease so peer knows there are leases and it doesn't have one
-        Mux.ServerSession.lease(pid, :millisecond, 0)
+        Mux.Server.Connection.lease(pid, :millisecond, 0)
         {:next_state, :alarm, data}
       true ->
         {:next_state, :lease, data}
@@ -178,11 +178,11 @@ defmodule Mux.Server.Manager do
 
   def init_session(ref, dest, handshake, present, handler, opts) do
     {module, _} = handler
-    {:ok, _} = Registry.register(Mux.ServerSession, dest, module)
+    {:ok, _} = Registry.register(Mux.Server.Connection, dest, module)
     receive do
       {:enter_loop, ^ref, sock} ->
         arg = {handshake, present, handler}
-        Mux.ServerSession.enter_loop(Mux.Server.Delegator, sock, arg, opts)
+        Mux.Server.Connection.enter_loop(Mux.Server.Delegator, sock, arg, opts)
     end
   end
 

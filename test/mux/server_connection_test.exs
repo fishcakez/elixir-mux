@@ -1,12 +1,11 @@
-defmodule Mux.ServerSessionTest do
+defmodule Mux.Server.ConnectionTest do
   use ExUnit.Case, async: true
 
   setup context do
     debug = context[:debug] || [:log]
     session_opts = context[:session_opts] || []
     opts = [debug: debug, session_opts: session_opts,
-            headers: context[:headers],
-            wire_contexts: [Mux.Deadline]]
+            headers: context[:headers], contexts: context[:contexts] || []]
     {cli, srv} = pair(opts)
     {:ok, [client: cli, server: srv]}
   end
@@ -16,6 +15,7 @@ defmodule Mux.ServerSessionTest do
     assert_receive {^cli, {:packet, 1}, :receive_ping}
   end
 
+  @tag contexts: [Mux.Deadline]
   test "server dispatch returns ok response", %{client: cli} do
     ctx = %{Mux.Deadline => Mux.Deadline.new(100)}
     wire = Mux.Context.to_wire(ctx)
@@ -316,7 +316,8 @@ defmodule Mux.ServerSessionTest do
     :gen_tcp.close(l)
 
     cli = MuxProxy.spawn_link(cli_sock, opts)
-    srv = MuxServerProxy.spawn_link(srv_sock, opts)
+    contexts = Keyword.get(opts, :contexts, [])
+    srv = MuxServerProxy.spawn_link(srv_sock, contexts, opts)
 
     unless Keyword.get(opts, :headers) do
       MuxProxy.commands(cli, [{:send, 1, {:transmit_init, 1, %{}}}])

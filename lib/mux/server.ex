@@ -8,7 +8,7 @@ defmodule Mux.Server do
   use Supervisor
 
   @type option ::
-    Mux.ServerSession.option |
+    Mux.Connection.option |
     {:max_restarts, non_neg_integer} |
     {:max_seconds, pos_integer} |
     {:restart, Supervisor.restart} |
@@ -17,6 +17,7 @@ defmodule Mux.Server do
     {:port, :inet.port_number} |
     {:socket_opt, [:gen_tcp.listen_option]} |
     {:handshake, {module, any}} |
+    {:handshake_timeout, timeout} |
     {:presentation, {module, any}} |
     {:lease_interval, timeout} |
     {:lease_alarms, [any()]} |

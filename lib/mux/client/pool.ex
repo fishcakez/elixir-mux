@@ -4,7 +4,7 @@ defmodule Mux.Client.Pool do
   use Supervisor
 
   @type option ::
-    Mux.ClientSession.option |
+    Mux.Client.Connection.option |
     {:spawn_opt, [:proc_lib.spawn_option]}
 
   @spec child_spec({Mux.Packet.dest, [option]}) :: Supervisor.child_spec
@@ -40,7 +40,7 @@ defmodule Mux.Client.Pool do
     end
     args = [dest, handshake, present, opts]
     session =
-      %{id: {dest, Mux.ClientSession},
+      %{id: {dest, Mux.Client.Connection},
         start: {__MODULE__, :spawn_session, args},
         type: :worker, restart: :temporary}
     Supervisor.init([session], [strategy: :simple_one_for_one])
@@ -82,7 +82,7 @@ defmodule Mux.Client.Pool do
     receive do
       {:enter_loop, ^ref, sock} ->
         arg = {dest, handshake, presenation}
-        Mux.ClientSession.enter_loop(Mux.Client.Delegator, sock, arg, opts)
+        Mux.Client.Connection.enter_loop(Mux.Client.Delegator, sock, arg, opts)
     end
   end
 end

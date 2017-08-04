@@ -8,7 +8,7 @@ defmodule Mux.Client do
   use Supervisor
 
   @type option ::
-    Mux.ClientSession.option |
+    Mux.Connection.option |
     {:spawn_opt, [:proc_lib.spawn_option]} |
     {:address, :inet.socket_address() | :inet.hostname()} |
     {:port, :inet.port_number} |
@@ -16,6 +16,7 @@ defmodule Mux.Client do
     {:connect_timeout, timeout} |
     {:connect_interval, timeout} |
     {:handshake, {module, any}} |
+    {:handshake_timeout, timeout} |
     {:presentation, {module, any}} |
     {:grace, timeout}
 
@@ -36,7 +37,7 @@ defmodule Mux.Client do
     with {:ok, pid, {present, state}} <- Mux.Client.Dispatcher.lookup(dest),
          {:ok, body} = apply(present, :encode, [request, state]),
          {:ok, receive_body}
-          <- Mux.ClientSession.sync_dispatch(pid, dest, tab, body, timeout) do
+          <- Mux.Client.Connection.sync_dispatch(pid, dest, tab, body, timeout) do
         {:ok, _} = apply(present, :decode, [receive_body, state])
     end
   end

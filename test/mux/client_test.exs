@@ -24,8 +24,8 @@ defmodule Mux.ClientTest do
 
   test "client registers itself with destination", context do
     %{clients: [cli], dest: dest} = context
-    assert Registry.keys(Mux.ClientSession, cli) == [dest]
-    assert Registry.lookup(Mux.ClientSession, dest) == [{cli, {MuxTest, nil}}]
+    assert Registry.keys(Mux.Client.Connection, cli) == [dest]
+    assert Registry.lookup(Mux.Client.Connection, dest) == [{cli, {MuxTest, nil}}]
     assert stop(context) == [{:normal, :normal}]
   end
 
@@ -103,11 +103,11 @@ defmodule Mux.ClientTest do
     assert_receive {^srv, {:packet, 1}, :receive_ping}
 
     # client session not going to send more requests
-    task2 = Task.async(Mux.ClientSession, :sync_dispatch, [cli, dest, %{}, "nacked"])
+    task2 = Task.async(Mux.Client.Connection, :sync_dispatch, [cli, dest, %{}, "nacked"])
     assert Task.await(task2) == :nack
 
     # client session not registered anymore!
-    assert Registry.lookup(Mux.ClientSession, dest) == []
+    assert Registry.lookup(Mux.Client.Connection, dest) == []
 
     MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :ok, %{}, "ok"}}])
     assert Task.await(task1) == {:ok, %MuxTest{body: "ok"}}

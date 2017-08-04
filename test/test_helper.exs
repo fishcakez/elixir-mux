@@ -51,7 +51,7 @@ defmodule MuxTest do
 end
 
 defmodule MuxClientProxy do
-  @behaviour Mux.ClientSession
+  @behaviour Mux.Client.Connection
 
   defmodule Handshake do
     @behaviour Mux.ClientHandshake
@@ -82,7 +82,7 @@ defmodule MuxClientProxy do
     receive do
       {^parent, socket} ->
         arg = {headers, parent}
-        Mux.ClientSession.enter_loop(__MODULE__, socket, arg, opts)
+        Mux.Client.Connection.enter_loop(__MODULE__, socket, arg, opts)
     end
   end
 
@@ -118,7 +118,7 @@ defmodule MuxClientProxy do
   end
 end
 defmodule MuxServerProxy do
-  @behaviour Mux.ServerSession
+  @behaviour Mux.Server.Connection
 
   defmodule Handshake do
     @behaviour Mux.ServerHandshake
@@ -141,8 +141,8 @@ defmodule MuxServerProxy do
   defmodule Handler do
     @behaviour Mux.ServerHandler
 
-    def init(parent),
-      do: {:ok, parent}
+    def init({contexts, parent}),
+      do: {:ok, contexts, parent}
 
     def dispatch(dest, dest_tab, body, parent) do
       context = Mux.Context.get()
@@ -157,22 +157,23 @@ defmodule MuxServerProxy do
       do: send(parent, {self(), :terminate, reason})
   end
 
-  def spawn_link(socket, opts) do
-    pid = :proc_lib.spawn_link(__MODULE__, :init_it, [self(), opts])
+  def spawn_link(socket, contexts, opts) do
+    pid = :proc_lib.spawn_link(__MODULE__, :init_it, [self(), contexts, opts])
     :ok = :gen_tcp.controlling_process(socket, pid)
     send(pid, {self(), socket})
     pid
   end
 
-  def init_it(parent, opts) do
+  def init_it(parent, contexts, opts) do
     receive do
       {^parent, socket} ->
-        Mux.ServerSession.enter_loop(__MODULE__, socket, parent, opts)
+        arg = {contexts, parent}
+        Mux.Server.Connection.enter_loop(__MODULE__, socket, arg, opts)
     end
   end
 
-  def init(parent),
-    do: {:ok, parent}
+  def init({contexts, parent}),
+    do: {:ok, contexts, parent}
 
   def handshake(headers, parent) do
     send(parent, {self(), :handshake, headers})

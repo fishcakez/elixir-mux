@@ -1,7 +1,7 @@
 defmodule Mux.Client.Delegator do
   @moduledoc false
 
-  @behaviour Mux.ClientSession
+  @behaviour Mux.Client.Connection
 
   def init({dest, {handshake, arg1}, {present, arg2}}) do
     {:ok, headers, state1} = apply(handshake, :init, [arg1])
@@ -20,7 +20,7 @@ defmodule Mux.Client.Delegator do
 
   def handshake(headers, {dest, {handshake, state}, present_info}) do
     {:ok, opts, state} = apply(handshake, :handshake, [headers, state])
-    {:ok, _} = Registry.register(Mux.ClientSession, dest, present_info)
+    {:ok, _} = Registry.register(Mux.Client.Connection, dest, present_info)
     {:ok, opts, {dest, {handshake, state}, present_info}}
   end
 
@@ -28,12 +28,12 @@ defmodule Mux.Client.Delegator do
     do: {:ok, data}
 
   def drain({dest, _, _} = data) do
-    Registry.unregister(Mux.ClientSession, dest)
+    Registry.unregister(Mux.Client.Connection, dest)
     {:ok, data}
   end
 
   def terminate(reason, {dest, handshake_info, present_info}) do
-    Registry.unregister(Mux.ClientSession, dest)
+    Registry.unregister(Mux.Client.Connection, dest)
   after
     terminate(reason, handshake_info, present_info)
   end

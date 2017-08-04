@@ -3,7 +3,7 @@ defmodule Mux.Client.Dispatcher do
 
   @spec lookup(Mux.Packet.dest) :: {:ok, pid, {module, any}} | :nack
   def lookup(dest) do
-    case Registry.lookup(Mux.ClientSession, dest) do
+    case Registry.lookup(Mux.Client.Connection, dest) do
       [] ->
         :nack
       [{pid, info}] ->

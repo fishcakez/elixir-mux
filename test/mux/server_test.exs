@@ -123,8 +123,9 @@ defmodule Mux.ServerTest do
   end
 
   defp pair(dest, opts) do
+    srv_arg = {[], self()}
     srv_opts = Keyword.put(opts, :port, 0)
-    {:ok, sup} = Mux.Server.start_link(MuxServerProxy, dest, self(), srv_opts)
+    {:ok, sup} = Mux.Server.start_link(MuxServerProxy, dest, srv_arg, srv_opts)
     [{_, {ip, port}}] = Registry.lookup(Mux.Server.Socket, dest)
 
     {:ok, cli_sock} = :gen_tcp.connect(ip, port, [active: false])
@@ -134,7 +135,7 @@ defmodule Mux.ServerTest do
     # process is alive and then we can discover it
     MuxProxy.commands(cli, [{:send, 1, :transmit_ping}])
     assert_receive {^cli, {:packet, 1}, :receive_ping}
-    [{srv, _}] = Registry.lookup(Mux.ServerSession, dest)
+    [{srv, _}] = Registry.lookup(Mux.Server.Connection, dest)
 
     # perform a handshake
     MuxProxy.commands(cli, [{:send, 2, {:transmit_init, 1, %{}}}])

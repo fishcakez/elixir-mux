@@ -1,10 +1,5 @@
-defmodule Mux.ServerSession do
-  @moduledoc """
-  Server loop for a Mux session.
-
-  This module defines a TCP Mux server that multiplexes dispatches over a
-  single session.
-  """
+defmodule Mux.Server.Connection do
+  @moduledoc false
 
   @behaviour Mux.Connection
 
@@ -18,7 +13,6 @@ defmodule Mux.ServerSession do
 
   @handshake_timeout 5_000
   @handshake_check "tinit check"
-  @wire_contexts [Mux.Trace]
   @mux_version 1
   @session_size 32
   @frame_size 0xFFFF
@@ -31,9 +25,9 @@ defmodule Mux.ServerSession do
   @type server :: Mux.Connection.connection
   @type option ::
     Mux.Connection.option |
-    {:handshake_timeout, timeout} |
-    {:wire_contexts, [module]}
-   @type session_option ::
+    {:handshake_timeout, timeout}
+
+  @type session_option ::
     {:session_size, pos_integer} |
     {:frame_size, pos_integer} |
     {:ping_interval, timeout}
@@ -45,10 +39,10 @@ defmodule Mux.ServerSession do
     {:error, %Mux.ServerError{}}
 
   @callback init(state) ::
-    {:ok, state}
+    {:ok, contexts :: [module], state}
 
   @callback handshake(Mux.Packet.headers, state) ::
-    {:ok, Mux.Packet.headers, [Mux.ServerSession.session_option], state} |
+    {:ok, Mux.Packet.headers, [session_option], state} |
     {:error, %Mux.ServerError{}, state}
 
   @callback dispatch(Mux.Packet.dest, Mux.Packet.dest_table,
@@ -66,7 +60,7 @@ defmodule Mux.ServerSession do
 
   @spec enter_loop(module, :gen_tcp.socket, state, [option]) :: no_return
   def enter_loop(mod, sock, state, opts) do
-    {srv_opts, opts} = Keyword.split(opts, [:handshake_timeout, :wire_contexts])
+    {srv_opts, opts} = Keyword.split(opts, [:handshake_timeout])
     arg = {{mod, state}, srv_opts}
     Mux.Connection.enter_loop(__MODULE__, sock, arg, opts)
   end
@@ -75,8 +69,7 @@ defmodule Mux.ServerSession do
   def init({handler, opts}) do
     Process.flag(:trap_exit, true)
     timeout = Keyword.get(opts, :handshake_timeout, @handshake_timeout)
-    handler = handler_init(handler)
-    contexts = Keyword.get(opts, :wire_contexts, @wire_contexts)
+    {contexts, handler} = handler_init(handler)
     # session_size is 0 until handshake succeeds, lease is assumed to be held
     # for infinity until told otherwise.
     state = %State{exchanges: %{}, tasks: %{}, session_size: 0, ref: make_ref(),
@@ -314,8 +307,8 @@ defmodule Mux.ServerSession do
   end
 
   defp handler_init({mod, state}) do
-    {:ok, state} = apply(mod, :init, [state])
-    {mod, state}
+    {:ok, contexts, state} = apply(mod, :init, [state])
+    {contexts, {mod, state}}
   end
 
   defp handler_handshake(headers, {mod, state}) do

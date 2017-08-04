@@ -1,7 +1,7 @@
 defmodule Mux.Server.Delegator do
   @moduledoc false
 
-  @behaviour Mux.ServerSession
+  @behaviour Mux.Server.Connection
 
   def init({{handshake, arg1}, {present, arg2}, handler_info}) do
     {:ok, state1} = apply(handshake, :init, [arg1])
@@ -45,7 +45,7 @@ defmodule Mux.Server.Delegator do
 
   defp init(handshake_info, present_info, {handler, arg}) do
     try do
-      {:ok, _state} = apply(handler, :init, [arg])
+      {:ok, _contexts, _state} = apply(handler, :init, [arg])
     catch
       kind, reason ->
         stack = System.stacktrace()
@@ -53,8 +53,8 @@ defmodule Mux.Server.Delegator do
         terminate(reason, handshake_info, present_info)
         :erlang.raise(kind, reason, stack)
     else
-      {:ok, state} ->
-        {:ok, {handshake_info, present_info, {handler, state}}}
+      {:ok, contexts, state} ->
+        {:ok, contexts, {handshake_info, present_info, {handler, state}}}
     end
   end
 
