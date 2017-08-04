@@ -3,6 +3,9 @@ defmodule Mux.Client.Pool do
 
   use Supervisor
 
+  @session {Mux.ClientSession.Default, nil}
+  @presentation {Mux.Presentation.Default, nil}
+
   @type option ::
     Mux.Client.Connection.option |
     {:spawn_opt, [:proc_lib.spawn_option]}
@@ -32,8 +35,8 @@ defmodule Mux.Client.Pool do
   end
 
   def init({dest, opts}) do
-    {session, opts} = pop!(opts, :session)
-    {{module, _arg} = present, opts} = pop!(opts, :presentation)
+    {session, opts} = pop(opts, :session, @session)
+    {{module, _arg} = present, opts} = pop(opts, :presentation, @presentation)
     # only register on init and not code change
     if Registry.keys(__MODULE__, self()) == [] do
       Registry.register(__MODULE__, dest, module)
@@ -58,10 +61,8 @@ defmodule Mux.Client.Pool do
     end
   end
 
-  defp pop!(opts, key) do
-    case Keyword.pop(opts, key) do
-      {nil, _opts} ->
-        raise ArgumentError, "#{key} callback not specified"
+  defp pop(opts, key, default) do
+    case Keyword.pop(opts, key, default) do
       {{_mod, _arg}, _opts} = result ->
         result
       {bad, _opts} ->

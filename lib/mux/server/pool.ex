@@ -3,6 +3,9 @@ defmodule Mux.Server.Pool do
 
   @behaviour :acceptor_pool
 
+  @session {Mux.ClientSession.Default, nil}
+  @presentation {Mux.Presentation.Default, nil}
+
   @spec child_spec({module, Mux.Packet.dest, any, Keyword.t}) ::
     Supervisor.child_spec
   def child_spec({module, dest, arg, opts}) do
@@ -33,8 +36,8 @@ defmodule Mux.Server.Pool do
 
     flags = %{intensity: max_restarts, period: max_seconds}
 
-    {session, opts} = pop!(opts, :session)
-    {present, opts} = pop!(opts, :presentation)
+    {session, opts} = pop(opts, :session, @session)
+    {present, opts} = pop(opts, :presentation, @presentation)
     man_arg = {dest, session, present, {module, arg}, opts}
 
     spec = %{id: {dest, module},
@@ -46,10 +49,8 @@ defmodule Mux.Server.Pool do
     {:ok, {flags, [spec]}}
   end
 
-  defp pop!(opts, key) do
-    case Keyword.pop(opts, key) do
-      {nil, _opts} ->
-        raise ArgumentError, "#{key} callback not specified"
+  defp pop(opts, key, default) do
+    case Keyword.pop(opts, key, default) do
       {{_mod, _arg}, _opts} = result ->
         result
       {bad, _opts} ->

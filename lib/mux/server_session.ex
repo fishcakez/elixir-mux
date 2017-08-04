@@ -17,3 +17,25 @@ defmodule Mux.ServerSession do
 
   @callback terminate(reason :: any, state) :: any
 end
+
+defmodule Mux.ServerSession.Default do
+  @moduledoc false
+  @behaviour Mux.ServerSession
+  @session_size 32
+  @frame_size 0xFFFF
+  @ping_interval 10_000
+
+  def init(state),
+    do: {:ok, state}
+
+  def handshake(headers, state) do
+    frame_size = Map.get(headers, "mux-framer", @frame_size)
+    opts = [frame_size: frame_size,
+            session_size: @session_size,
+            ping_interval: @ping_interval]
+   {:ok, %{"mux-framer" => frame_size}, opts, state}
+  end
+
+  def terminate(_, _),
+    do: :ok
+end

@@ -13,3 +13,20 @@ defmodule Mux.Presentation do
 
   @callback terminate(reason :: any, state :: any) :: any
 end
+
+defmodule Mux.Presentation.Default do
+  @moduledoc false
+  @behaviour Mux.Presentation
+
+  def init(state),
+    do: state
+
+  def encode(iodata, _),
+    do: iodata
+
+  def decode(iodata, _),
+    do: iodata
+
+  def terminate(_, _),
+    do: :ok
+end
