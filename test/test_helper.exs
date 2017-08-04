@@ -32,6 +32,24 @@ defmodule MuxProxy do
     do: send(parent, {self(), :terminate, reason})
 end
 
+defmodule MuxTest do
+  @behaviour Mux.Presentation
+
+  defstruct [:body]
+
+  def init(state),
+    do: {:ok, state}
+
+  def encode(%MuxTest{body: body}, _),
+    do: {:ok, body}
+
+  def decode(body, _),
+    do: {:ok, %MuxTest{body: body}}
+
+  def terminate(_, _),
+    do: :ok
+end
+
 defmodule MuxClientProxy do
   @behaviour Mux.ClientSession
 

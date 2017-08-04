@@ -16,26 +16,38 @@ defmodule Mux.Client do
     {:connect_timeout, timeout} |
     {:connect_interval, timeout} |
     {:handshake, {module, any}} |
+    {:presentation, {module, any}} |
     {:grace, timeout}
+
+  @type result ::
+    {:ok, response :: any} |
+    {:error, %Mux.ApplicationError{}} |
+    :nack |
+    {:error, %Mux.ServerError{}}
+
 
   @manager_options [:socket_opt, :connect_timeout, :connect_interval,
                     :drain_alarms, :grace]
 
-  @spec sync_dispatch(Mux.Packet.dest, Mux.Packet.dest_table, body :: binary,
-        timeout) :: Mux.ClientSession.result
-  def sync_dispatch(dest, tab, body, timeout \\ 5_000) do
+  @spec sync_dispatch(Mux.Packet.dest, Mux.Packet.dest_table, request :: any,
+        timeout) :: result
+  def sync_dispatch(dest, tab, request, timeout \\ 5_000) do
     # should use dest table to alter destination
-    name = {:via, Mux.Client.Dispatcher, dest}
-    Mux.ClientSession.sync_dispatch(name, dest, tab, body, timeout)
+    with {:ok, pid, {present, state}} <- Mux.Client.Dispatcher.lookup(dest),
+         {:ok, body} = apply(present, :encode, [request, state]),
+         {:ok, receive_body}
+          <- Mux.ClientSession.sync_dispatch(pid, dest, tab, body, timeout) do
+        {:ok, _} = apply(present, :decode, [receive_body, state])
+    end
   end
 
   @spec whereis(Mux.Packet.dest, Mux.Packet.dest_table) :: pid | nil
   def whereis(dest, _tab) do
     # should use dest table to alter destination
-    case Mux.Client.Dispatcher.whereis_name(dest) do
-      pid when is_pid(pid) ->
+    case Mux.Client.Dispatcher.lookup(dest) do
+      {:ok, pid, _} ->
         pid
-      :undefined ->
+      :nack ->
         nil
     end
   end

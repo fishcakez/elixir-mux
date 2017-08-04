@@ -32,14 +32,16 @@ defmodule Mux.Client.Pool do
   end
 
   def init({dest, opts}) do
-    {{module, _arg} = handshake, opts} = pop!(opts, :handshake)
+    {handshake, opts} = pop!(opts, :handshake)
+    {{module, _arg} = present, opts} = pop!(opts, :presentation)
     # only register on init and not code change
     if Registry.keys(__MODULE__, self()) == [] do
       Registry.register(__MODULE__, dest, module)
     end
+    args = [dest, handshake, present, opts]
     session =
       %{id: {dest, Mux.ClientSession},
-        start: {__MODULE__, :spawn_session, [dest, handshake, opts]},
+        start: {__MODULE__, :spawn_session, args},
         type: :worker, restart: :temporary}
     Supervisor.init([session], [strategy: :simple_one_for_one])
   end
@@ -68,18 +70,18 @@ defmodule Mux.Client.Pool do
     end
   end
 
-  def spawn_session(dest, handshake, opts, ref) do
+  def spawn_session(dest, handshake, present, opts, ref) do
     {spawn_opts, opts} = Keyword.split(opts, [:spawn_opt])
-    spawn_args = [ref, dest, handshake, opts]
+    spawn_args = [ref, dest, handshake, present, opts]
     spawn_opts = [:link | spawn_opts]
     pid = :proc_lib.spawn_opt(__MODULE__, :init_session, spawn_args, spawn_opts)
     {:ok, pid}
   end
 
-  def init_session(ref, dest, handshake, opts) do
+  def init_session(ref, dest, handshake, presenation, opts) do
     receive do
       {:enter_loop, ^ref, sock} ->
-        arg = {dest, handshake}
+        arg = {dest, handshake, presenation}
         Mux.ClientSession.enter_loop(Mux.Client.Delegator, sock, arg, opts)
     end
   end

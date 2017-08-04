@@ -25,8 +25,7 @@ defmodule Mux.ClientTest do
   test "client registers itself with destination", context do
     %{clients: [cli], dest: dest} = context
     assert Registry.keys(Mux.ClientSession, cli) == [dest]
-    assert Registry.lookup(Mux.ClientSession, dest) ==
-      [{cli, MuxClientProxy.Handshake}]
+    assert Registry.lookup(Mux.ClientSession, dest) == [{cli, {MuxTest, nil}}]
     assert stop(context) == [{:normal, :normal}]
   end
 
@@ -46,13 +45,14 @@ defmodule Mux.ClientTest do
 
   test "client handles dispatch", context do
     %{servers: [srv], dest: dest} = context
-    task = Task.async(Mux.Client, :sync_dispatch, [dest, %{"a" => "b"}, "hello"])
+    req = %MuxTest{body: "hello"}
+    task = Task.async(Mux.Client, :sync_dispatch, [dest, %{"a" => "b"}, req])
     assert_receive {^srv, {:packet, tag},
       {:transmit_dispatch, %{}, ^dest, %{"a" => "b"}, "hello"}}
     ctx = %{"hi" => "world"}
     body = "success!"
     MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :ok, ctx, body}}])
-    assert Task.await(task) == {:ok, body}
+    assert Task.await(task) == {:ok, %MuxTest{body: body}}
     assert stop(context) == [{:normal, :normal}]
   end
 
@@ -63,8 +63,8 @@ defmodule Mux.ClientTest do
   end
 
   @tag clients: 0
-  test "dispatch exits with noproc if no clients", %{dest: dest} = context do
-    assert {:noproc, _} = catch_exit(Mux.Client.sync_dispatch(dest, %{}, "hi"))
+  test "dispatch returns nack if no clients", %{dest: dest} = context do
+    assert Mux.Client.sync_dispatch(dest, %{}, %MuxTest{body: "hi"}) == :nack
     assert stop(context) == []
   end
 
@@ -92,7 +92,7 @@ defmodule Mux.ClientTest do
 
   test "client shuts down once last exchange responds", context do
     %{clients: [cli], servers: [srv], dest: dest, supervisors: [sup]} = context
-    task1 = Task.async(Mux.Client, :sync_dispatch, [dest, %{}, "hello"])
+    task1 = Task.async(Mux.Client, :sync_dispatch, [dest, %{}, %MuxTest{body: "hello"}])
     assert_receive {^srv, {:packet, tag}, {:transmit_dispatch, %{}, ^dest, %{}, "hello"}}
 
     # parent of supervisor and it traps so will exit normally
@@ -110,7 +110,7 @@ defmodule Mux.ClientTest do
     assert Registry.lookup(Mux.ClientSession, dest) == []
 
     MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :ok, %{}, "ok"}}])
-    assert Task.await(task1) == {:ok, "ok"}
+    assert Task.await(task1) == {:ok, %MuxTest{body: "ok"}}
 
     assert_receive {^cli, :terminate, :normal}
     assert_receive {^srv, :terminate, :normal}
@@ -187,6 +187,7 @@ defmodule Mux.ClientTest do
       |> Keyword.put(:address, ip)
       |> Keyword.put(:port, port)
       |> Keyword.put(:handshake, {MuxClientProxy.Handshake, {%{}, self()}})
+      |> Keyword.put(:presentation, {MuxTest, nil})
 
     {:ok, sup} = Mux.Client.start_link(dest, cli_opts)
 

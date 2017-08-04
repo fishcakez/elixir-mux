@@ -14,6 +14,8 @@ defmodule Mux.ServerTest do
       |> Keyword.put_new(:debug, [:log])
       |> Keyword.put_new(:drain_alarms, [drain_id])
       |> Keyword.put_new(:lease_alarms, [lease_id])
+      |> Keyword.put(:handshake, {MuxServerProxy.Handshake, self()})
+      |> Keyword.put(:presentation, {MuxTest, nil})
 
     {cli, srv, sup} = pair(dest, opts)
 
@@ -31,8 +33,8 @@ defmodule Mux.ServerTest do
   test "server handles dispatch", context do
     %{client: cli} = context
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "hi", %{}, "world"}}])
-    assert_receive {task, :dispatch, {%{}, "hi", %{}, "world"}}
-    send(task, {self(), {:ok, "hello"}})
+    assert_receive {task, :dispatch, {%{}, "hi", %{}, %MuxTest{body: "world"}}}
+    send(task, {self(), {:ok, %MuxTest{body: "hello"}}})
     assert_receive {^cli, {:packet, _}, {:receive_dispatch, :ok, %{}, "hello"}}
     assert stop(context) == {:normal, :normal}
   end
@@ -42,7 +44,7 @@ defmodule Mux.ServerTest do
   test "server session exits abnormally if busy on close", context do
     %{client: cli} = context
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "hi", %{}, "world"}}])
-    assert_receive {task, :dispatch, {%{}, "hi", %{}, "world"}}
+    assert_receive {task, :dispatch, {%{}, "hi", %{}, %MuxTest{body: "world"}}}
     mon = Process.monitor(task)
     assert stop(context) == {:normal, {:tcp_error, :closed}}
     assert_receive {:DOWN, ^mon, _, _, :killed}
@@ -52,7 +54,7 @@ defmodule Mux.ServerTest do
   test "server session shuts down when after grace period", context do
     %{client: cli, server: srv, supervisor: sup} = context
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "hi", %{}, "world"}}])
-    assert_receive {task, :dispatch, {%{}, "hi", %{}, "world"}}
+    assert_receive {task, :dispatch, {%{}, "hi", %{}, %MuxTest{body: "world"}}}
     mon = Process.monitor(task)
     Supervisor.stop(sup)
     assert_receive {^srv, :terminate, :shutdown}
@@ -113,15 +115,15 @@ defmodule Mux.ServerTest do
 
     # got a lease again, dispatches succeed
     MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "hi", %{}, "world"}}])
-    assert_receive {task, :dispatch, {%{}, "hi", %{}, "world"}}
-    send(task, {self(), {:ok, "hello"}})
+    assert_receive {task, :dispatch, {%{}, "hi", %{}, %MuxTest{body: "world"}}}
+    send(task, {self(), {:ok, %MuxTest{body: "hello"}}})
     assert_receive {^cli, {:packet, _}, {:receive_dispatch, :ok, %{}, "hello"}}
 
     assert stop(context) == {:normal, :normal}
   end
 
   defp pair(dest, opts) do
-    srv_opts = [port: 0, handshake: {MuxServerProxy.Handshake, self()}] ++ opts
+    srv_opts = Keyword.put(opts, :port, 0)
     {:ok, sup} = Mux.Server.start_link(MuxServerProxy, dest, self(), srv_opts)
     [{_, {ip, port}}] = Registry.lookup(Mux.Server.Socket, dest)
 
