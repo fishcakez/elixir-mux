@@ -43,7 +43,7 @@ defmodule Mux.ClientTest do
     assert stop(context) == [{:normal, :normal}, {:normal, :normal}]
   end
 
-  test "client handles dispatch", context do
+  test "client handles sync dispatch", context do
     %{servers: [srv], dest: dest} = context
     req = %MuxTest{body: "hello"}
     task = Task.async(Mux.Client, :sync_dispatch, [dest, %{"a" => "b"}, req])
@@ -53,6 +53,70 @@ defmodule Mux.ClientTest do
     body = "success!"
     MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :ok, ctx, body}}])
     assert Task.await(task) == {:ok, %MuxTest{body: body}}
+    assert stop(context) == [{:normal, :normal}]
+  end
+
+  test "client handles dispatch", context do
+    %{servers: [srv], dest: dest} = context
+    {_, ref} = Mux.Client.dispatch(dest, %{"a" => "b"}, %MuxTest{body: "hello"})
+    assert_receive {^srv, {:packet, tag},
+      {:transmit_dispatch, %{}, ^dest, %{"a" => "b"}, "hello"}}
+    ctx = %{"hi" => "world"}
+    body = "success!"
+    MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :ok, ctx, body}}])
+    assert_receive {^ref, {:ok, %MuxTest{body: ^body}}}
+    assert stop(context) == [{:normal, :normal}]
+  end
+
+  test "client cancels pending dispatch", context do
+    %{servers: [srv], dest: dest} = context
+    {pid, ref} = Mux.Client.dispatch(dest, %{}, %MuxTest{body: "hello"})
+    assert_receive {^srv, {:packet, tag},
+      {:transmit_dispatch, %{}, ^dest, %{}, "hello"}}
+    assert Mux.Client.cancel(pid, ref, "bye bye!") == :ok
+    assert_receive {^srv, {:packet, 0},
+      {:transmit_discarded, ^tag, "bye bye!"}}
+    MuxProxy.commands(srv, [{:send, tag, :receive_discarded}])
+    assert_receive {:DOWN, ^ref, _, _, _}
+    refute_received {^ref, _}
+    assert stop(context) == [{:normal, :normal}]
+  end
+
+  test "client cancel returns error if dispatch complete", context do
+    %{servers: [srv], dest: dest} = context
+    {pid, ref} = Mux.Client.dispatch(dest, %{}, %MuxTest{body: "hello"})
+    assert_receive {^srv, {:packet, tag},
+      {:transmit_dispatch, %{}, ^dest, %{}, "hello"}}
+    MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :ok, %{}, "ok"}}])
+    assert_receive {^ref, {:ok, %MuxTest{body: "ok"}}}
+    assert Mux.Client.cancel(pid, ref, "bye bye!") == {:error, :not_found}
+    assert stop(context) == [{:normal, :normal}]
+    refute_received {^srv, _, _}
+  end
+
+  test "client cancel returns error if reference invalid", context do
+    %{servers: [srv], dest: dest} = context
+    {pid, ref} = Mux.Client.dispatch(dest, %{}, %MuxTest{body: "hello"})
+    assert_receive {^srv, {:packet, tag},
+      {:transmit_dispatch, %{}, ^dest, %{}, "hello"}}
+    assert Mux.Client.cancel(pid, make_ref(), "wrong") == {:error, :not_found}
+    MuxProxy.commands(srv, [{:send, tag, {:receive_dispatch, :ok, %{}, "ok"}}])
+    assert_receive {^ref, {:ok, %MuxTest{body: "ok"}}}
+    assert stop(context) == [{:normal, :normal}]
+    refute_received {^srv, _, _}
+  end
+
+  test "client asynchronously cancels pending dispatch", context do
+    %{servers: [srv], dest: dest} = context
+    {pid, ref} = Mux.Client.dispatch(dest, %{}, %MuxTest{body: "hello"})
+    assert_receive {^srv, {:packet, tag},
+      {:transmit_dispatch, %{}, ^dest, %{}, "hello"}}
+    assert Mux.Client.async_cancel(pid, ref, "bye bye!") == :ok
+    assert_receive {^srv, {:packet, 0},
+      {:transmit_discarded, ^tag, "bye bye!"}}
+    MuxProxy.commands(srv, [{:send, tag, :receive_discarded}])
+    assert_receive {:DOWN, ^ref, _, _, _}
+    refute_received {^ref, _}
     assert stop(context) == [{:normal, :normal}]
   end
 
@@ -85,8 +149,15 @@ defmodule Mux.ClientTest do
   end
 
   @tag clients: 0
-  test "dispatch returns nack if no clients", %{dest: dest} = context do
+  test "sync dispatch returns nack if no clients", %{dest: dest} = context do
     assert Mux.Client.sync_dispatch(dest, %{}, %MuxTest{body: "hi"}) == :nack
+    assert stop(context) == []
+  end
+
+  @tag clients: 0
+  test "dispatch receives nack if no clients", %{dest: dest} = context do
+    assert {_, ref} = Mux.Client.dispatch(dest, %{}, %MuxTest{body: "hi"})
+    assert_receive {^ref, :nack}
     assert stop(context) == []
   end
 

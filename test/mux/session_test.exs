@@ -19,7 +19,7 @@ defmodule Mux.SessionTest do
     Mux.Deadline.bind(100, fn ->
       Mux.Trace.span([:debug, :sampling_known], fn ->
         %{Mux.Deadline => deadline, Mux.Trace => parent} = Mux.Context.get()
-        ref = Mux.Client.Connection.dispatch(cli, dest, dest_tab, body)
+        assert {^cli, ref} = Mux.Client.Connection.dispatch(cli, dest, dest_tab, body)
         assert_receive {task, :dispatch, {ctx, ^dest, ^dest_tab, ^body}}
         assert %{Mux.Deadline => ^deadline, Mux.Trace => child} = ctx
         assert child.trace_id === parent.trace_id
@@ -33,7 +33,7 @@ defmodule Mux.SessionTest do
   end
 
   test "client cancel kills task", %{client: cli} do
-    ref = Mux.Client.Connection.dispatch(cli, "", %{}, "hi")
+    assert {^cli, ref} = Mux.Client.Connection.dispatch(cli, "", %{}, "hi")
     assert_receive {task, :dispatch, {%{}, "", %{}, "hi"}}
     mon = Process.monitor(task)
     assert Mux.Client.Connection.cancel(cli, ref) == :ok
@@ -43,8 +43,8 @@ defmodule Mux.SessionTest do
   test "server drain causes close after tasks handled", context do
     %{client: cli, server: srv} = context
 
-    ref1 = Mux.Client.Connection.dispatch(cli, "dest", %{}, "1")
-    ref2 = Mux.Client.Connection.dispatch(cli, "dest", %{}, "2")
+    assert {^cli, ref1} = Mux.Client.Connection.dispatch(cli, "dest", %{}, "1")
+    assert {^cli, ref2} = Mux.Client.Connection.dispatch(cli, "dest", %{}, "2")
     assert_receive {task1, :dispatch, {%{}, "dest", %{}, "1"}}
     assert_receive {task2, :dispatch, {%{}, "dest", %{}, "2"}}
 
@@ -57,7 +57,7 @@ defmodule Mux.SessionTest do
     # draining must have commenced once this is received
     assert_receive {^ref1, {:ok, "one"}}
     # client nacks all new requests
-    ref3 = Mux.Client.Connection.dispatch(cli, "", %{}, "drain")
+    assert {^cli, ref3} = Mux.Client.Connection.dispatch(cli, "", %{}, "drain")
     assert_receive {^ref3, :nack}
 
     send(task2, {self(), {:ok, "two"}})
@@ -77,14 +77,14 @@ defmodule Mux.SessionTest do
     assert_receive {^cli, :lease, {:millisecond, 0}}
     send(cli, {self(), {:ok, self()}})
 
-    ref1 = Mux.Client.Connection.dispatch(cli, "dest", %{}, "1")
+    assert {^cli, ref1} = Mux.Client.Connection.dispatch(cli, "dest", %{}, "1")
     assert_receive {^ref1, :nack}
 
     Mux.Server.Connection.lease(srv, :second, 1)
     assert_receive {^cli, :lease, {:millisecond, 1000}}
     send(cli, {self(), {:ok, self()}})
 
-    ref2 = Mux.Client.Connection.dispatch(cli, "dest", %{}, "2")
+    assert {^cli, ref2} = Mux.Client.Connection.dispatch(cli, "dest", %{}, "2")
     assert_receive {task2, :dispatch, {%{}, "dest", %{}, "2"}}
     send(task2, {self(), {:ok, "lease"}})
     assert_receive {^ref2, {:ok, "lease"}}
@@ -93,7 +93,7 @@ defmodule Mux.SessionTest do
     assert_receive {^cli, :lease, {:millisecond, 0}}
     send(cli, {self(), {:ok, self()}})
 
-    ref3 = Mux.Client.Connection.dispatch(cli, "dest", %{}, "3")
+    assert {^cli, ref3} = Mux.Client.Connection.dispatch(cli, "dest", %{}, "3")
     assert_receive {^ref3, :nack}
   end
 

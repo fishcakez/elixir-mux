@@ -64,12 +64,17 @@ defmodule Mux.Client.Connection do
   end
 
   @spec dispatch(client, Mux.Packet.dest, Mux.Packet.dest_table,
-        body :: binary) :: reference
+        body :: binary) :: {pid, reference} | :nack
   def dispatch(client, dest, tab, body) do
-    ref = make_ref()
-    request = {:dispatch, {self(), ref}, wire_context(), dest, tab, body}
-    Mux.Connection.cast(client, request)
-    ref
+    case GenServer.whereis(client) do
+      pid when is_pid(pid) ->
+        ref = Process.monitor(pid)
+        request = {:dispatch, {self(), ref}, wire_context(), dest, tab, body}
+        Mux.Connection.cast(pid, request)
+        {pid, ref}
+      nil ->
+        :nack
+    end
   end
 
   @spec cancel(client, reference, why :: String.t, timeout) ::
