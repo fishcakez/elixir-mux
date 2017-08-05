@@ -63,13 +63,25 @@ defmodule Mux.ClientTest do
   end
 
   @tag clients: 1
-  test "whereis returns nil if no clients have lease", context do
-    %{servers: [srv], dest: dest} = context
+  test "whereis returns client if all have no lease", context do
+    %{servers: [srv], clients: [cli], dest: dest} = context
     MuxProxy.commands(srv, [{:send, 0, {:transmit_lease, 1000, 0}},
                             {:send, 1, :transmit_ping}])
     assert_receive {^srv, {:packet, 1}, :receive_ping}
-    assert Mux.Client.whereis(dest, %{}) == nil
+    assert Mux.Client.whereis(dest, %{}) == cli
     assert stop(context) == [{:normal, :normal}]
+  end
+
+  @tag clients: 2
+  test "whereis favours other clients if client has expired lease", context do
+    %{servers: [srv1, _], clients: [_, cli2], dest: dest} = context
+    MuxProxy.commands(srv1, [{:send, 0, {:transmit_lease, 1000, 0}},
+                             {:send, 1, :transmit_ping}])
+    assert_receive {^srv1, {:packet, 1}, :receive_ping}
+    for _ <- 1..100 do
+      assert Mux.Client.whereis(dest, %{}) == cli2
+    end
+    assert stop(context) == [{:normal, :normal}, {:normal, :normal}]
   end
 
   @tag clients: 0

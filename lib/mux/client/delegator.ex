@@ -65,6 +65,10 @@ defmodule Mux.Client.Delegator do
     Registry.unregister(Mux.Client.Connection, dest)
     %Data{data | status: :drain}
   end
+  defp next(:drain, %Data{status: :expire, dest: dest} = data) do
+    Registry.unregister(Mux.Client.Connection, {:backup, dest})
+    %Data{data | status: :drain}
+  end
   defp next(:drain, data),
     do: %Data{data | status: :drain}
 
@@ -78,8 +82,11 @@ defmodule Mux.Client.Delegator do
   defp next(:lease, %Data{status: :init} = data),
     do: data
 
-  defp next(:handshake, %Data{status: :init_expire} = data),
-    do: %Data{data | status: :expire}
+  defp next(:handshake, %Data{status: :init_expire} = data) do
+    %Data{dest: dest, present: present_info} = data
+    Registry.register(Mux.Client.Connection, {:backup, dest}, present_info)
+    %Data{data | status: :expire}
+  end
   defp next(:expire, %Data{status: :init_expire} = data),
     do: data
   defp next(:lease, %Data{status: :init_expire} = data),
@@ -88,10 +95,15 @@ defmodule Mux.Client.Delegator do
   defp next(:lease, %Data{status: :expire} = data) do
     %Data{dest: dest, present: present_info} = data
     Registry.register(Mux.Client.Connection, dest, present_info)
+    Registry.unregister(Mux.Client.Connection, {:backup, dest})
     %Data{data | status: :lease}
   end
 
-  defp next(:expire, %Data{status: :lease, dest: dest} = data) do
+  defp next(:expire, %Data{status: :lease} = data) do
+    %Data{dest: dest, present: present_info} = data
+    # its likely we wanted to expire 1 RTT ago because dispatches would need to
+    # arrive before server lease expires
+    Registry.register(Mux.Client.Connection, {:backup, dest}, present_info)
     Registry.unregister(Mux.Client.Connection, dest)
     %Data{data | status: :expire}
   end
