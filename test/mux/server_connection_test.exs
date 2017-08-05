@@ -175,6 +175,16 @@ defmodule Mux.Server.ConnectionTest do
     assert_receive {^cli, {:packet, 1}, :receive_drain}
   end
 
+  test "server nacks once lease expires", %{client: cli, server: srv} do
+    Mux.Server.Connection.lease(srv, 1000, 1)
+    assert_receive {^cli, {:packet, 0}, {:transmit_lease, :millisecond, 1}}
+
+    :timer.sleep(20)
+
+    MuxProxy.commands(cli, [{:send, 1, {:transmit_dispatch, %{}, "", %{}, "hi"}}])
+    assert_receive {^cli, {:packet, 1}, {:receive_dispatch, :nack, %{}, ""}}
+  end
+
   test "server responds with error on request", %{client: cli} do
     MuxProxy.commands(cli, [{:send, 1, {:transmit_request, %{}, "hi"}}])
     assert_receive {^cli, {:packet, 1}, {:receive_error, "can not handle request"}}

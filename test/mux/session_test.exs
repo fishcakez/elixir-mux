@@ -74,7 +74,8 @@ defmodule Mux.SessionTest do
     assert_receive {^cli, :lease, {:millisecond, 1}}
     send(cli, {self(), {:ok, self()}})
 
-    :timer.sleep(20)
+    assert_receive {^cli, :lease, {:millisecond, 0}}
+    send(cli, {self(), {:ok, self()}})
 
     ref1 = Mux.Client.Connection.dispatch(cli, "dest", %{}, "1")
     assert_receive {^ref1, :nack}

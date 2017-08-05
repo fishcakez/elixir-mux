@@ -62,6 +62,16 @@ defmodule Mux.ClientTest do
     assert stop(context) == []
   end
 
+  @tag clients: 1
+  test "whereis returns nil if no clients have lease", context do
+    %{servers: [srv], dest: dest} = context
+    MuxProxy.commands(srv, [{:send, 0, {:transmit_lease, 1000, 0}},
+                            {:send, 1, :transmit_ping}])
+    assert_receive {^srv, {:packet, 1}, :receive_ping}
+    assert Mux.Client.whereis(dest, %{}) == nil
+    assert stop(context) == [{:normal, :normal}]
+  end
+
   @tag clients: 0
   test "dispatch returns nack if no clients", %{dest: dest} = context do
     assert Mux.Client.sync_dispatch(dest, %{}, %MuxTest{body: "hi"}) == :nack

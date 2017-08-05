@@ -6,9 +6,9 @@ defmodule Mux.Client.Connection do
   defmodule State do
     @moduledoc false
     @enforce_keys [:tags, :exchanges, :monitors, :refs, :socket, :timer,
-                   :handler]
+                   :handler, :lease]
     defstruct [:tags, :exchanges, :monitors, :refs, :socket, :timer,
-               :handler]
+               :handler, :lease]
   end
 
   @discarded_message "process discarded"
@@ -99,7 +99,7 @@ defmodule Mux.Client.Connection do
     timeout = Keyword.get(opts, :handshake_timeout, @handshake_timeout)
     {headers, handler} = handler_init(handler)
     state = %State{tags: :handshake, exchanges: %{}, monitors: %{}, refs: %{},
-                   handler: handler, socket: sock,
+                   handler: handler, socket: sock, lease: make_ref(),
                    timer: {@handshake_tag, start_timer(timeout)}}
     {[{:send, @handshake_tag, {:transmit_init, @mux_version, headers}}], state}
   end
@@ -140,6 +140,9 @@ defmodule Mux.Client.Connection do
   def handle(:info, {:timeout, tref, _}, %State{timer: {_tag, tref}}) do
     # no response from last ping or handshake
     exit({:tcp_error, :timeout})
+  end
+  def handle(:info, {:timeout, tref, _}, %State{lease: tref} = state) do
+    handle_lease(:millisecond, 0, state)
   end
   def handle(:info, :shutdown_write, state) do
     {[], check_drain(state)}
@@ -404,8 +407,18 @@ defmodule Mux.Client.Connection do
     {[transmit_ping(@ping_tag)], state}
   end
 
-  defp handle_lease(unit, timeout, %State{handler: handler} = state),
-    do: {[], %State{state | handler: handler_lease(unit, timeout, handler)}}
+  defp handle_lease(unit, timeout, state) do
+    %State{handler: handler, lease: lease} = state
+    cancel_timer(lease)
+    handler = handler_lease(unit, timeout, handler)
+    case timeout do
+      0 ->
+        {[], %State{state | handler: handler, lease: make_ref()}}
+      _ ->
+        ms_timeout = System.convert_time_unit(timeout, unit, :millisecond)
+        {[], %State{state | handler: handler, lease: start_timer(ms_timeout)}}
+    end
+  end
 
   defp handle_drain(tag, %State{tags: :handshake} = state),
     do: handle_drain(tag, :handshake_drain, state)
