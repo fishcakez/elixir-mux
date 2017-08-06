@@ -29,11 +29,11 @@ defmodule Mux.ServerSession.Default do
     do: {:ok, state}
 
   def handshake(headers, state) do
-    frame_size = Map.get(headers, "mux-framer", @frame_size)
+    <<frame_size::32>> = Map.get(headers, "mux-framer", <<@frame_size::32>>)
     opts = [frame_size: frame_size,
             session_size: @session_size,
             ping_interval: @ping_interval]
-   {:ok, %{"mux-framer" => frame_size}, opts, state}
+   {:ok, %{"mux-framer" => <<frame_size::32>>}, opts, state}
   end
 
   def terminate(_, _),

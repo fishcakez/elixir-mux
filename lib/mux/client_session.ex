@@ -27,7 +27,8 @@ defmodule Mux.ClientSession.Default do
     do: {:ok, %{"mux-framer" => <<@frame_size::32>>}, state}
 
   def handshake(headers, state) do
-    opts = [frame_size: Map.get(headers, "mux-framer", @frame_size),
+    <<frame_size::32>> = Map.get(headers, "mux-framer", <<@frame_size::32>>)
+    opts = [frame_size: frame_size,
             session_size: @session_size,
             ping_interval: @ping_interval]
    {:ok, opts, state}
