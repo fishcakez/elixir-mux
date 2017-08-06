@@ -3,8 +3,8 @@ defmodule Mux.Server.Pool do
 
   @behaviour :acceptor_pool
 
-  @session {Mux.ClientSession.Default, nil}
-  @presentation {Mux.Presentation.Default, nil}
+  @session {Mux.ServerSession.Default, nil}
+  @presentation {Mux.ServerPresentation.Default, nil}
 
   @spec child_spec({module, Mux.Packet.dest, any, Keyword.t}) ::
     Supervisor.child_spec

@@ -25,10 +25,10 @@ defmodule Mux.Server.Delegator do
   end
 
   def dispatch(dest, tab, body, {_, {present, state1}, {handler, state2}}) do
-    {:ok, req} = apply(present, :decode, [body, state1])
+    {:ok, metadata, req} = apply(present, :decode, [body, state1])
     case apply(handler, :dispatch, [dest, tab, req, state2]) do
       {:ok, resp} ->
-        {:ok, _} = apply(present, :encode, [resp, state1])
+        {:ok, _} = apply(present, :encode, [metadata, resp, state1])
       {:error, } = error ->
         error
       :nack ->

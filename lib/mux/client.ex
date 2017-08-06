@@ -27,9 +27,8 @@ defmodule Mux.Client do
 
   @type result ::
     {:ok, response :: any} |
-    {:error, %Mux.ApplicationError{}} |
-    :nack |
-    {:error, %Mux.ServerError{}}
+    {:error, Exception.t}
+    :nack
 
   @discarded_message "process discarded"
   @manager_options [:socket_opt, :connect_timeout, :connect_interval,
@@ -40,9 +39,9 @@ defmodule Mux.Client do
   def sync_dispatch(dest, tab, request, timeout \\ 5_000) do
     # should use dest table to alter destination
     with {:ok, pid, {present, state}} <- Mux.Client.Dispatcher.lookup(dest),
-         {:ok, body} = apply(present, :encode, [request, state]),
+         {:ok, metadata, body} = apply(present, :encode, [request, state]),
          {:ok, receive_body} <- sync_dispatch(pid, dest, tab, body, timeout) do
-      {:ok, _} = apply(present, :decode, [receive_body, state])
+      apply(present, :decode, [metadata, receive_body, state])
     end
   end
 
@@ -155,19 +154,19 @@ defmodule Mux.Client do
   defp enter_loop(from, mon, dest, tab, request) do
     with {:ok, pid, present_info} <- Mux.Client.Dispatcher.lookup(dest),
          {present, state} = present_info,
-         {:ok, body} = apply(present, :encode, [request, state]),
+         {:ok, metadata, body} = apply(present, :encode, [request, state]),
          {_, _} = to <- Mux.Client.Connection.dispatch(pid, dest, tab, body) do
-      loop(from, mon, to, present_info)
+      loop(from, mon, to, metadata, present_info)
     else
       :nack ->
         terminate(:nack, from)
     end
   end
 
-  defp loop({_, tag} = from, mon, {cli, ref} = to, present_info) do
+  defp loop({_, tag} = from, mon, {cli, ref} = to, metadata, present_info) do
     receive do
       {^ref, result} ->
-        terminate(result, from, present_info)
+        terminate(result, from, metadata, present_info)
       {:async_cancel, ^tag, why} ->
         Mux.Client.Connection.async_cancel(cli, ref, why)
         exit(:cancel)
@@ -180,7 +179,7 @@ defmodule Mux.Client do
         exit(:cancel)
       {:cancel, sync, _, _} ->
         reply(sync, {:error, :not_found})
-        loop(from, mon, to, present_info)
+        loop(from, mon, to, metadata, present_info)
       {:DOWN, ^ref, _, _, normal} when normal in [:normal, :noproc] ->
         # never hit network
         terminate(:nack, from)
@@ -192,11 +191,11 @@ defmodule Mux.Client do
     end
   end
 
-  defp terminate({:ok, body}, from, {present, state}) do
-    {:ok, _} = ok = apply(present, :decode, [body, state])
-    terminate(ok, from)
+  defp terminate({:ok, body}, from, metadata, {present, state}) do
+    result = apply(present, :decode, [metadata, body, state])
+    terminate(result, from)
   end
-  defp terminate(result, from, _),
+  defp terminate(result, from, _, _),
     do: terminate(result, from)
 
   defp terminate(result, from) do

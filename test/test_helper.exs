@@ -33,21 +33,7 @@ defmodule MuxProxy do
 end
 
 defmodule MuxTest do
-  @behaviour Mux.Presentation
-
   defstruct [:body]
-
-  def init(state),
-    do: {:ok, state}
-
-  def encode(%MuxTest{body: body}, _),
-    do: {:ok, body}
-
-  def decode(body, _),
-    do: {:ok, %MuxTest{body: body}}
-
-  def terminate(_, _),
-    do: :ok
 end
 
 defmodule MuxClientProxy do
@@ -69,6 +55,22 @@ defmodule MuxClientProxy do
 
     def terminate(reason, parent),
       do: send(parent, {self(), :terminate, reason})
+  end
+
+  defmodule Presentation do
+    @behaviour Mux.ClientPresentation
+
+    def init(state),
+      do: {:ok, state}
+
+    def encode(%MuxTest{body: body}, _),
+      do: {:ok, __MODULE__, body}
+
+    def decode(__MODULE__, body, _),
+      do: {:ok, %MuxTest{body: body}}
+
+    def terminate(_, _),
+      do: :ok
   end
 
   def spawn_link(socket, headers, opts) do
@@ -135,6 +137,22 @@ defmodule MuxServerProxy do
     end
 
     def terminate(_reason, _parent),
+      do: :ok
+  end
+
+  defmodule Presentation do
+    @behaviour Mux.ServerPresentation
+
+    def init(state),
+      do: {:ok, state}
+
+    def decode(body, _),
+      do: {:ok, __MODULE__, %MuxTest{body: body}}
+
+    def encode(__MODULE__, %MuxTest{body: body}, _),
+      do: {:ok, body}
+
+    def terminate(_, _),
       do: :ok
   end
 

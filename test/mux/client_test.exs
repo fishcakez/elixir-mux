@@ -25,7 +25,8 @@ defmodule Mux.ClientTest do
   test "client registers itself with destination", context do
     %{clients: [cli], dest: dest} = context
     assert Registry.keys(Mux.Client.Connection, cli) == [dest]
-    assert Registry.lookup(Mux.Client.Connection, dest) == [{cli, {MuxTest, nil}}]
+    assert Registry.lookup(Mux.Client.Connection, dest) ==
+      [{cli, {MuxClientProxy.Presentation, nil}}]
     assert stop(context) == [{:normal, :normal}]
   end
 
@@ -280,7 +281,7 @@ defmodule Mux.ClientTest do
       |> Keyword.put(:address, ip)
       |> Keyword.put(:port, port)
       |> Keyword.put(:session, {MuxClientProxy.Session, {%{}, self()}})
-      |> Keyword.put(:presentation, {MuxTest, nil})
+      |> Keyword.put(:presentation, {MuxClientProxy.Presentation, nil})
 
     {:ok, sup} = Mux.Client.start_link(dest, cli_opts)
 
